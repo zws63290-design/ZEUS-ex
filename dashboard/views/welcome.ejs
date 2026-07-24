@@ -148,11 +148,15 @@
         function updateBackground() {
             const url = bgInput.value.trim();
             if (url) {
-                container.style.backgroundImage = `url('${url}')`;
                 const img = new Image();
                 img.onload = function() {
                     bgNativeWidth = this.width;
                     bgNativeHeight = this.height;
+
+                    container.style.backgroundImage = `url('${url}')`;
+                    container.style.backgroundSize = 'cover';
+                    container.style.backgroundRepeat = 'no-repeat';
+                    container.style.backgroundPosition = 'center';
 
                     const containerWidth = container.clientWidth;
                     const aspect = this.height / this.width;
@@ -163,6 +167,7 @@
                 img.src = url;
             } else {
                 container.style.backgroundImage = 'none';
+                container.style.backgroundSize = '';
                 container.style.height = '400px';
                 bgNativeWidth = container.clientWidth || 800;
                 bgNativeHeight = 400;
@@ -204,31 +209,46 @@
             let isDragging = false;
             let startX, startY, initialX, initialY;
 
-            el.addEventListener('mousedown', (e) => {
+            function onStart(e) {
                 isDragging = true;
-                startX = e.clientX;
-                startY = e.clientY;
+                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+                startX = clientX;
+                startY = clientY;
                 initialX = parseInt(xInput.value) || 0;
                 initialY = parseInt(yInput.value) || 0;
                 e.preventDefault();
-            });
+            }
 
-            document.addEventListener('mousemove', (e) => {
+            function onMove(e) {
                 if (!isDragging) return;
+                e.preventDefault(); // منع التمرير خاصة على الجوال
+                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                const clientY = e.touches ? e.touches[0].clientY : e.clientY;
                 const scale = getScale();
 
-                const dx = (e.clientX - startX) / scale;
-                const dy = (e.clientY - startY) / scale;
+                const dx = (clientX - startX) / scale;
+                const dy = (clientY - startY) / scale;
 
                 xInput.value = Math.round(initialX + dx);
                 yInput.value = Math.round(initialY + dy);
 
                 updatePositions();
-            });
+            }
 
-            document.addEventListener('mouseup', () => {
+            function onEnd() {
                 isDragging = false;
-            });
+            }
+
+            // أحداث الماوس
+            el.addEventListener('mousedown', onStart);
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onEnd);
+
+            // أحداث اللمس (للأجهزة التي تعمل باللمس)
+            el.addEventListener('touchstart', onStart, { passive: false });
+            document.addEventListener('touchmove', onMove, { passive: false });
+            document.addEventListener('touchend', onEnd);
         }
 
         bgInput.addEventListener('input', updateBackground);
