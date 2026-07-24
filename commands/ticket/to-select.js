@@ -7,8 +7,6 @@ const {
     EmbedBuilder
 } = require('discord.js');
 
-const keyValueService = require('../../services/keyValueService');
-
 module.exports = {
     adminsOnly: true,
 
@@ -22,17 +20,6 @@ module.exports = {
                 .setDescription('ايدي الرسالة')
                 .setRequired(true)
         )
-
-        // اختيار القالب من القوالب المحفوظة (تم إزالة autocomplete)
-        .addStringOption(option => {
-            option
-                .setName('template')
-                .setDescription('اختر قالب الترحيب (سيتم عرض القوالب في خطوة منفصلة)')
-                .setRequired(true)
-                // .setAutocomplete(true);  // تم إزالة autocomplete
-
-            return option;
-        })
 
         .addStringOption(option =>
             option.setName('description1')
@@ -62,15 +49,42 @@ module.exports = {
             option.setName('description5')
                 .setDescription('وصف الخيار الخامس')
                 .setRequired(false)
-        ),
+        )
 
-    // تم إزالة دالة autocomplete بالكامل
+        .addStringOption(option =>
+            option.setName('emoji1')
+                .setDescription('إيموجي الخيار الأول')
+                .setRequired(false)
+        )
+
+        .addStringOption(option =>
+            option.setName('emoji2')
+                .setDescription('إيموجي الخيار الثاني')
+                .setRequired(false)
+        )
+
+        .addStringOption(option =>
+            option.setName('emoji3')
+                .setDescription('إيموجي الخيار الثالث')
+                .setRequired(false)
+        )
+
+        .addStringOption(option =>
+            option.setName('emoji4')
+                .setDescription('إيموجي الخيار الرابع')
+                .setRequired(false)
+        )
+
+        .addStringOption(option =>
+            option.setName('emoji5')
+                .setDescription('إيموجي الخيار الخامس')
+                .setRequired(false)
+        ),
 
     async execute(interaction) {
 
         const messageId = interaction.options.getString('message_id');
 
-        // لن نستخدم template من الخيارات مباشرة، بل سنعرض قائمة منسدلة لاختيار القالب
         const descriptions = [
             interaction.options.getString('description1'),
             interaction.options.getString('description2'),
@@ -79,78 +93,15 @@ module.exports = {
             interaction.options.getString('description5'),
         ];
 
+        const emojis = [
+            interaction.options.getString('emoji1'),
+            interaction.options.getString('emoji2'),
+            interaction.options.getString('emoji3'),
+            interaction.options.getString('emoji4'),
+            interaction.options.getString('emoji5'),
+        ];
+
         try {
-            // جلب القوالب من قاعدة البيانات
-            const templates = (await keyValueService.get('welcomeTemplates', interaction.guild.id)) || {};
-            const templateNames = Object.keys(templates);
-
-            if (templateNames.length === 0) {
-                return interaction.reply({
-                    content: '{emoji:circlex} لا توجد قوالب مسجلة. استخدم الأمر `/welcome-setup` أولاً.',
-                    flags: MessageFlags.Ephemeral,
-                });
-            }
-
-            // بناء قائمة منسدلة لاختيار القالب (مثل طريقة setup-ticket)
-            const selectOptions = [
-                {
-                    label: '{emoji:circlex} بدون قالب',
-                    value: '__none__',
-                    description: 'لن يتم استخدام أي قالب ترحيب',
-                },
-                ...templateNames.map(name => ({
-                    label: name,
-                    value: `template_${name}`,
-                    description: `القالب: ${name}`,
-                })),
-            ];
-
-            const templateSelect = new StringSelectMenuBuilder()
-                .setCustomId('template_select_for_to_select')
-                .setPlaceholder('{emoji:folder} اختر قالب الترحيب (أو بدون قالب)')
-                .addOptions(selectOptions);
-
-            const selectRow = new ActionRowBuilder().addComponents(templateSelect);
-
-            // إرسال رسالة مؤقتة لاختيار القالب
-            await interaction.reply({
-                content: '**الخطوة 1 من 2:** اختر قالب الترحيب الذي تريد استخدامه مع التذاكر.',
-                components: [selectRow],
-                flags: MessageFlags.Ephemeral,
-            });
-
-            // انتظار اختيار المستخدم
-            const filter = (i) => i.user.id === interaction.user.id && i.customId === 'template_select_for_to_select';
-            const collector = interaction.channel.createMessageComponentCollector({
-                filter,
-                max: 1,
-                time: 120000,
-            });
-
-            let selectedTemplate = null;
-            let templateName = null;
-            let isNone = false;
-
-            await new Promise((resolve, reject) => {
-                collector.on('collect', async (i) => {
-                    const selectedValue = i.values[0];
-                    if (selectedValue === '__none__') {
-                        isNone = true;
-                        selectedTemplate = null;
-                        templateName = null;
-                    } else {
-                        templateName = selectedValue.replace('template_', '');
-                        selectedTemplate = templates[templateName];
-                    }
-                    await i.deferUpdate();
-                    resolve(i);
-                });
-                collector.on('end', (collected, reason) => {
-                if (collected.size === 0) reject(new Error('انتهى الوقت'));
-                });
-            });
-
-            // بعد اختيار القالب، نكمل العملية
             // جلب الرسالة
             const message = await interaction.channel.messages.fetch(messageId);
 
@@ -160,9 +111,8 @@ module.exports = {
             );
 
             if (!buttonRow) {
-                return interaction.editReply({
+                return interaction.reply({
                     content: '{emoji:circlex} لا توجد أزرار في الرسالة.',
-                    components: [],
                     flags: MessageFlags.Ephemeral,
                 });
             }
@@ -170,7 +120,7 @@ module.exports = {
             // إنشاء السلكت منيو
             const selectMenu = new StringSelectMenuBuilder()
                 .setCustomId('ticket_select')
-                .setPlaceholder('اختر نوع التذكرة من هنا!');  // تم تعريبها
+                .setPlaceholder('اختر نوع التذكرة من هنا!');
 
             // تحويل الأزرار إلى خيارات
             buttonRow.components.forEach((button, index) => {
@@ -178,9 +128,11 @@ module.exports = {
                     .setLabel(button.label)
                     .setValue(button.customId);
 
-                // الايموجي
+                // الايموجي: نعطي الأولوية للزر الأصلي، ثم الإيموجي المُمرر
                 if (button.emoji) {
                     option.setEmoji(button.emoji);
+                } else if (emojis[index]) {
+                    option.setEmoji(emojis[index]);
                 }
 
                 // الوصف
@@ -194,9 +146,9 @@ module.exports = {
             // زر الريسيت
             selectMenu.addOptions(
                 new StringSelectMenuOptionBuilder()
-                    .setLabel('إعادة تعيين')  // تم تعريبها
+                    .setLabel('إعادة تعيين')
                     .setValue('reset')
-                    .setEmoji(require('../../utils/emojis').clock.toString())  // تم إضافة إيموجي مناسب
+                    .setEmoji(require('../../utils/emojis').clock.toString())
             );
 
             // صف السلكت منيو
@@ -207,32 +159,17 @@ module.exports = {
                 components: [finalSelectRow],
             });
 
-            // حفظ القالب المختار إذا لم يكن "بدون قالب"
-            if (!isNone && selectedTemplate) {
-                await keyValueService.set(
-                    'ticketSelectTemplate',
-                    interaction.guild.id,
-                    {
-                        templateName,
-                        template: selectedTemplate,
-                    }
-                );
-            }
-
             // الرد النهائي
             let replyMessage = `{emoji:circlecheck} تم تحويل الأزرار إلى قائمة خيارات.`;
-            if (!isNone && templateName) {
-                replyMessage += `\n{emoji:folder} تم ربط القالب \`${templateName}\`.`;
-            } else {
-                replyMessage += `\n{emoji:circlex} لم يتم استخدام أي قالب ترحيب.`;
-            }
             if (descriptions.some(d => d)) {
                 replyMessage += `\n{emoji:message} تم إضافة الأوصاف بنجاح.`;
             }
+            if (emojis.some(e => e)) {
+                replyMessage += `\n{emoji:edit} تم إضافة الإيموجيات المخصصة.`;
+            }
 
-            await interaction.editReply({
+            await interaction.reply({
                 content: replyMessage,
-                components: [],
                 flags: MessageFlags.Ephemeral,
             });
 
