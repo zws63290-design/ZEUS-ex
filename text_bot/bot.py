@@ -42,7 +42,16 @@ GDRIVE_API_KEY = os.getenv("GDRIVE_API_KEY", "").strip()
 MAX_IMAGES_PER_REQUEST = int(os.getenv("MAX_IMAGES_PER_REQUEST", "5"))
 MAX_IMAGE_SIZE_MB = int(os.getenv("MAX_IMAGE_SIZE_MB", "8"))
 
-from utils.storage import close_mongo, load_accounts_data, save_accounts_data
+from utils.storage import (
+    admin_adjust_user,
+    close_mongo,
+    consume_point,
+    get_user_profile,
+    list_user_profiles,
+    load_accounts_data,
+    save_accounts_data,
+    update_user_settings,
+)
 from utils.emojis import emoji_manager, emojize, themed_embed, markdown_block
 
 intents = discord.Intents.default()
@@ -76,6 +85,45 @@ async def _patched_messageable_send(self, *args, **kwargs):
     return await _original_messageable_send(self, *args, **kwargs)
 discord.abc.Messageable.send = _patched_messageable_send
 
+
+
+# ============================================================
+# عرض موحد للرسائل — Emojis + Markdown منسق
+# ============================================================
+RULE = "━━━━━━━━━━━━━━━━━━━━"
+SUPPORT_SERVER_URL = os.getenv("SUPPORT_SERVER_URL", "").strip()
+
+def line():
+    return RULE
+
+def fmt_bool(value):
+    return "مفعّل" if value else "معطّل"
+
+def build_extraction_prompt(settings):
+    spacing = "اترك سطرًا فارغًا بين كل فقاعة كلام." if settings.get("bubble_spacing", True) else "لا تترك أسطرًا فارغة بين الفقاعات؛ اجعل النص متتابعًا ومنظمًا."
+    sfx = "ضمّن المؤثرات الصوتية والنصوص الجانبية كما تظهر." if settings.get("include_sfx", True) else "تجاهل المؤثرات الصوتية والنصوص الزخرفية غير الحوارية قدر الإمكان."
+    return (
+        "استخرج جميع النصوص من هذه الصورة (مانجا/مانهوا) بدقة عالية. "
+        "رتبها حسب ترتيب القراءة الصحيح (من اليمين إلى اليسار ومن الأعلى إلى الأسفل). "
+        f"{spacing} {sfx} "
+        "أعد النص فقط بدون أي تعليقات إضافية أو ترجمة."
+    )
+
+def make_docx_bytes(text):
+    def esc(v):
+        return (v or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    paragraphs = "".join(f"<w:p><w:r><w:t xml:space='preserve'>{esc(part)}</w:t></w:r></w:p>" for part in text.split("\n"))
+    document = f"""<?xml version='1.0' encoding='UTF-8' standalone='yes'?>
+<w:document xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'><w:body>{paragraphs}<w:sectPr/></w:body></w:document>"""
+    content_types = """<?xml version='1.0' encoding='UTF-8'?><Types xmlns='http://schemas.openxmlformats.org/package/2006/content-types'><Default Extension='rels' ContentType='application/vnd.openxmlformats-package.relationships+xml'/><Default Extension='xml' ContentType='application/xml'/><Override PartName='/word/document.xml' ContentType='application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml'/></Types>"""
+    rels = """<?xml version='1.0' encoding='UTF-8'?><Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'><Relationship Id='rId1' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument' Target='word/document.xml'/></Relationships>"""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", content_types)
+        zf.writestr("_rels/.rels", rels)
+        zf.writestr("word/document.xml", document)
+    buffer.seek(0)
+    return buffer
 
 # ============================================================
 # دوال إدارة الحسابات — التخزين عبر MongoDB في utils/storage.py
@@ -432,7 +480,7 @@ def delete_chat(user_id, chat_id, service_type="chat"):
 # ============================================================
 # استخراج النص من صورة واحدة
 # ============================================================
-def extract_text_from_single_image(user_id, image_bytes, image_name, thinking_enabled, chat_id=None):
+def extract_text_from_single_image(user_id, image_bytes, image_name, thinking_enabled, settings=None, chat_id=None):
     uploaded = upload_image_to_qwen_oss(user_id, image_bytes, "ocr")
     if not chat_id:
         chat_id = create_new_chat(user_id, "ocr")
@@ -452,11 +500,7 @@ def extract_text_from_single_image(user_id, image_bytes, image_name, thinking_en
         "image_height": 1024,
     }
 
-    prompt = (
-        "استخرج جميع النصوص من هذه الصورة (مانجا/مانهوا) بدقة عالية. "
-        "رتبها حسب ترتيب القراءة الصحيح (من اليمين إلى اليسار ومن الأعلى إلى الأسفل). "
-        "أعد النص فقط بدون أي تعليقات إضافية أو ترجمة."
-    )
+    prompt = build_extraction_prompt(settings or {})
 
     message_data = {
         "chat_type": "t2t",
@@ -499,7 +543,7 @@ def extract_text_from_single_image(user_id, image_bytes, image_name, thinking_en
         if is_rate_limited_response(line_str):
             mark_account_rate_limited(user_id, "ocr")
             new_chat_id = create_new_chat(user_id, "ocr")
-            return extract_text_from_single_image(user_id, image_bytes, image_name, thinking_enabled, new_chat_id)
+            return extract_text_from_single_image(user_id, image_bytes, image_name, thinking_enabled, settings, new_chat_id)
         if line_str.startswith("data: "):
             data_content = line_str[6:].strip()
             if data_content == "[DONE]":
@@ -509,7 +553,7 @@ def extract_text_from_single_image(user_id, image_bytes, image_name, thinking_en
                 if is_rate_limited_response(data_json):
                     mark_account_rate_limited(user_id, "ocr")
                     new_chat_id = create_new_chat(user_id, "ocr")
-                    return extract_text_from_single_image(user_id, image_bytes, image_name, thinking_enabled, new_chat_id)
+                    return extract_text_from_single_image(user_id, image_bytes, image_name, thinking_enabled, settings, new_chat_id)
                 if "choices" in data_json and len(data_json["choices"]) > 0:
                     delta = data_json["choices"][0].get("delta", {})
                     if delta.get("phase") == "answer" and delta.get("content"):
@@ -824,6 +868,91 @@ class AccountDetailView(discord.ui.View):
         else:
             await interaction.response.send_message("الحساب غير موجود.", ephemeral=True)
 
+
+# ============================================================
+# واجهات المستخدم: الإعدادات والملف الشخصي ونظام النقاط
+# ============================================================
+class SettingsView(discord.ui.View):
+    def __init__(self, user):
+        super().__init__(timeout=240)
+        self.user = user
+        self.profile = get_user_profile(user)
+        self._rebuild()
+
+    def _rebuild(self):
+        self.clear_items()
+        settings = self.profile["settings"]
+        fmt = settings.get("output_format", "txt")
+        self.add_item(discord.ui.Button(label=f"صيغة الملف: {fmt.upper()}", emoji=emoji_manager.placeholder("folder"), style=discord.ButtonStyle.primary if fmt == "txt" else discord.ButtonStyle.success, custom_id="fmt", row=0))
+        self.children[-1].callback = self.toggle_format
+        spacing = settings.get("bubble_spacing", True)
+        self.add_item(discord.ui.Button(label=f"مسافات الفقاعات: {fmt_bool(spacing)}", emoji=emoji_manager.placeholder("list"), style=discord.ButtonStyle.success if spacing else discord.ButtonStyle.secondary, custom_id="spacing", row=1))
+        self.children[-1].callback = self.toggle_spacing
+        sfx = settings.get("include_sfx", True)
+        self.add_item(discord.ui.Button(label=f"المؤثرات الصوتية: {fmt_bool(sfx)}", emoji=emoji_manager.placeholder("music_play"), style=discord.ButtonStyle.success if sfx else discord.ButtonStyle.secondary, custom_id="sfx", row=1))
+        self.children[-1].callback = self.toggle_sfx
+
+    async def _guard(self, interaction):
+        if interaction.user.id != self.user.id:
+            await interaction.response.send_message("{emoji:lock} هذه اللوحة ليست لك.", ephemeral=True)
+            return False
+        return True
+
+    def embed(self):
+        s = self.profile["settings"]
+        return themed_embed(
+            title="{emoji:settings} لوحة إعدادات الاستخراج",
+            description=(
+                f"## إعداداتك الحالية\n{line()}\n"
+                f"{emoji_manager.placeholder('folder')} **صيغة الملف:** `{s.get('output_format', 'txt').upper()}`\n"
+                f"{emoji_manager.placeholder('list')} **مسافات بين الفقاعات:** `{fmt_bool(s.get('bubble_spacing', True))}`\n"
+                f"{emoji_manager.placeholder('music_play')} **تضمين المؤثرات الصوتية:** `{fmt_bool(s.get('include_sfx', True))}`\n\n"
+                "غيّر الخيارات من الأزرار؛ سيتم تطبيقها تلقائيًا على `/extract`."
+            ),
+            color_name="gold",
+        )
+
+    async def toggle_format(self, interaction):
+        if not await self._guard(interaction):
+            return
+        current = self.profile["settings"].get("output_format", "txt")
+        self.profile = update_user_settings(self.user, output_format="docx" if current == "txt" else "txt")
+        self._rebuild()
+        await interaction.response.edit_message(embed=self.embed(), view=self)
+
+    async def toggle_spacing(self, interaction):
+        if not await self._guard(interaction):
+            return
+        self.profile = update_user_settings(self.user, bubble_spacing=not self.profile["settings"].get("bubble_spacing", True))
+        self._rebuild()
+        await interaction.response.edit_message(embed=self.embed(), view=self)
+
+    async def toggle_sfx(self, interaction):
+        if not await self._guard(interaction):
+            return
+        self.profile = update_user_settings(self.user, include_sfx=not self.profile["settings"].get("include_sfx", True))
+        self._rebuild()
+        await interaction.response.edit_message(embed=self.embed(), view=self)
+
+
+def profile_embed(user, profile):
+    settings = profile["settings"]
+    support = f"\n{line()}\n{emoji_manager.placeholder('ticket')} **تجديد النقاط:** {SUPPORT_SERVER_URL}" if SUPPORT_SERVER_URL else ""
+    return themed_embed(
+        title="{emoji:user} بروفايل المستخدم",
+        description=(
+            f"# {user.display_name}\n{line()}\n"
+            f"{emoji_manager.placeholder('star')} **النقاط المتاحة:** `{profile.get('points', 0)}`\n{line()}\n"
+            f"{emoji_manager.placeholder('chartpie')} **إجمالي الاستخراجات:** `{profile.get('total_extractions', 0)}`\n{line()}\n"
+            f"{emoji_manager.placeholder('shield')} **الحالة:** `{'محظور' if profile.get('is_blocked') else 'نشط'}`\n{line()}\n"
+            f"{emoji_manager.placeholder('settings')} **الإخراج:** `{settings.get('output_format', 'txt').upper()}` | "
+            f"**المسافات:** `{fmt_bool(settings.get('bubble_spacing', True))}` | "
+            f"**المؤثرات:** `{fmt_bool(settings.get('include_sfx', True))}`"
+            f"{support}"
+        ),
+        color_name="purple",
+    )
+
 # ============================================================
 # الأوامر
 # ============================================================
@@ -847,19 +976,28 @@ async def on_ready():
 async def extract(interaction: discord.Interaction):
     await interaction.response.defer(thinking=True)
     user_id = interaction.user.id
+    profile = get_user_profile(interaction.user)
+    if profile.get("is_blocked"):
+        await interaction.followup.send("{emoji:lock} **تم منعك من استخدام البوت.**", ephemeral=True)
+        return
+    if int(profile.get("points", 0)) <= 0:
+        support = f"\n{emoji_manager.placeholder('ticket')} افتح تذكرة تجديد النقاط: {SUPPORT_SERVER_URL}" if SUPPORT_SERVER_URL else ""
+        await interaction.followup.send(f"{emoji_manager.placeholder('circlex')} **لا تملك نقاطًا كافية.**\n{line()}\nكل فصل يستهلك نقطة واحدة.{support}", ephemeral=True)
+        return
+    settings = profile["settings"]
 
-    # اختيار الوضع
     view = ModeSelectView(user_id)
-    await interaction.followup.send("اختر وضع المعالجة:", view=view)
+    await interaction.followup.send(f"{emoji_manager.placeholder('settings')} ## اختر وضع المعالجة\n{line()}", view=view)
     await view.wait()
     if not view.confirmed:
-        await interaction.followup.send("تم إلغاء العملية.", ephemeral=True)
+        await interaction.followup.send("{emoji:circlex} **تم إلغاء العملية.**", ephemeral=True)
         return
     thinking_enabled = view.thinking_enabled
 
     await interaction.followup.send(
-        "📤 أرسل الصور (حتى 5) مباشرة، أو ملف ZIP يحتوي على الصور، أو رابط Google Drive.\n"
-        "سيتم ترتيب الصور تلقائيًا حسب الأرقام في أسمائها."
+        f"{emoji_manager.placeholder('folderopen')} ## أرسل ملفات الفصل الآن\n{line()}\n"
+        f"{emoji_manager.placeholder('photo')} صور مباشرة (حتى {MAX_IMAGES_PER_REQUEST})، أو ZIP، أو رابط Google Drive.\n"
+        f"{emoji_manager.placeholder('clock')} سأعرض مؤشر انتظار فور بدء التحميل والمعالجة."
     )
 
     try:
@@ -869,13 +1007,14 @@ async def extract(interaction: discord.Interaction):
             timeout=300
         )
     except asyncio.TimeoutError:
-        await interaction.followup.send("انتهى الوقت، أعد الأمر مرة أخرى.", ephemeral=True)
+        await interaction.followup.send("{emoji:clock} **انتهى الوقت، أعد الأمر مرة أخرى.**", ephemeral=True)
         return
 
+    status_msg = await interaction.channel.send(f"{emoji_manager.placeholder('clock')} **جاري قراءة المصدر...**\n{line()}\nلا تقلق، سأحدّث هذه الرسالة أثناء العمل.")
     images = []
     if msg.attachments:
         if len(msg.attachments) > MAX_IMAGES_PER_REQUEST:
-            await interaction.followup.send(f"الحد الأقصى {MAX_IMAGES_PER_REQUEST} صور.", ephemeral=True)
+            await status_msg.edit(content=f"{emoji_manager.placeholder('circlex')} **الحد الأقصى {MAX_IMAGES_PER_REQUEST} صور.**")
             return
         for att in msg.attachments:
             if att.filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
@@ -885,11 +1024,12 @@ async def extract(interaction: discord.Interaction):
                 data = await att.read()
                 images.extend(extract_images_from_zip_bytes(data))
             else:
-                await interaction.followup.send(f"الملف {att.filename} غير مدعوم.", ephemeral=True)
+                await status_msg.edit(content=f"{emoji_manager.placeholder('circlex')} **الملف `{att.filename}` غير مدعوم.**")
                 return
     elif msg.content.startswith("http"):
         link = msg.content.strip()
         try:
+            await status_msg.edit(content=f"{emoji_manager.placeholder('clock')} **جاري تحميل رابطك وفحص الصور...**\n{line()}\nقد يستغرق Google Drive وقتًا أطول حسب حجم الفصل.")
             if "drive.google.com" in link:
                 images = await asyncio.to_thread(process_drive_link, link)
             else:
@@ -899,19 +1039,18 @@ async def extract(interaction: discord.Interaction):
                 else:
                     images.append((data, "downloaded_image.jpg"))
         except Exception as e:
-            await interaction.followup.send(f"فشل معالجة الرابط: {str(e)}", ephemeral=True)
+            await status_msg.edit(content=f"{emoji_manager.placeholder('circlex')} **فشل معالجة الرابط:** `{str(e)}`")
             return
     else:
-        await interaction.followup.send("أرسل صورًا أو ملف ZIP أو رابطًا صالحًا.", ephemeral=True)
+        await status_msg.edit(content="{emoji:circlex} **أرسل صورًا أو ملف ZIP أو رابطًا صالحًا.**")
         return
 
     if not images:
-        await interaction.followup.send("لم يتم العثور على صور صالحة.", ephemeral=True)
+        await status_msg.edit(content="{emoji:circlex} **لم يتم العثور على صور صالحة.**")
         return
 
     images.sort(key=lambda x: natural_sort_key(x[1]))
-
-    status_msg = await interaction.channel.send("⏳ جارٍ المعالجة...")
+    await status_msg.edit(content=f"{emoji_manager.placeholder('clock')} **بدأ الاستخراج الآن...**\n{line()}\nتم العثور على `{len(images)}` صورة.")
     combined_text = ""
     total_images = len(images)
     for idx, (img_bytes, img_name) in enumerate(images, start=1):
@@ -921,25 +1060,34 @@ async def extract(interaction: discord.Interaction):
                 user_id,
                 img_bytes,
                 img_name,
-                thinking_enabled
+                thinking_enabled,
+                settings
             )
-            separator = f"\n\n========== صورة {idx} ==========\n\n"
+            separator = f"\n\n{line()}\n## صورة {idx}\n{line()}\n\n"
             combined_text += separator + text
-            await status_msg.edit(content=f"⏳ تمت معالجة {idx} من {total_images} صورة...")
+            await status_msg.edit(content=f"{emoji_manager.placeholder('clock')} **المعالجة مستمرة...**\n{line()}\nتمت معالجة `{idx}` من `{total_images}` صورة.")
         except Exception as e:
-            await status_msg.edit(content=f"❌ حدث خطأ أثناء معالجة الصورة {idx}: {str(e)}")
+            await status_msg.edit(content=f"{emoji_manager.placeholder('circlex')} **حدث خطأ أثناء معالجة الصورة `{idx}`:** `{str(e)}`")
             return
+
+    ok, profile_after = consume_point(user_id)
+    if not ok:
+        await status_msg.edit(content=f"{emoji_manager.placeholder('circlex')} **لا توجد نقاط كافية لإرسال النتيجة.**")
+        return
 
     output_dir = BASE_DIR / "data"
     output_dir.mkdir(parents=True, exist_ok=True)
-    filename = output_dir / f"extracted_{user_id}_{int(time.time())}.txt"
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write(combined_text)
+    output_format = settings.get("output_format", "txt")
+    filename = output_dir / f"extracted_{user_id}_{int(time.time())}.{output_format}"
+    if output_format == "docx":
+        filename.write_bytes(make_docx_bytes(combined_text).getvalue())
+    else:
+        filename.write_text(combined_text, encoding="utf-8")
 
     file = discord.File(str(filename))
     embed = themed_embed(
         title="{emoji:circlecheck} اكتمل الاستخراج",
-        description=f"**تمت معالجة `{total_images}` صورة بنجاح.**\n---\n{emoji_manager.placeholder('photo')} تم إرفاق ملف TXT بالنتيجة.",
+        description=f"## تم استخراج الفصل بنجاح\n{line()}\n**تمت معالجة `{total_images}` صورة.**\n{emoji_manager.placeholder('star')} تم خصم نقطة واحدة. المتبقي: `{profile_after.get('points', 0)}`\n{line()}\n{emoji_manager.placeholder('photo')} تم إرفاق ملف `{output_format.upper()}` بالنتيجة.",
         color_name="green",
     )
     await status_msg.delete()
@@ -952,21 +1100,74 @@ async def extract(interaction: discord.Interaction):
 async def help_command(interaction: discord.Interaction):
     embed = themed_embed(
         title="{emoji:photo} ZEUS Text Bot",
-        description="**بوت مخصص لفرق الترجمة لاستخراج النصوص من صور المانجا والمانهوا بكفاءة عالية.**\n---\nاستخدم الأوامر أدناه لإدارة سير العمل.",
+        description=(
+            f"# مركز المساعدة\n{line()}\n"
+            "بوت احترافي لاستخراج نصوص المانجا والمانهوا مع نظام نقاط وإعدادات إخراج شخصية."
+        ),
         color_name="purple",
     )
-    embed.add_field(
-        name=emojize("{emoji:playerplay} /extract"),
-        value=emojize(
-            "**يبدأ عملية استخراج النصوص من الصور.**\n---\n"
-            "1. اختر وضع المعالجة: **دقة عالية** أو **سرعة عالية**.\n"
-            "2. أرسل الصور، ملف ZIP، أو رابط Google Drive.\n"
-            "3. يستخرج البوت النصوص ويرسل ملف TXT مرتب."
-        ),
-        inline=False,
-    )
-    embed.set_footer(text="ZEUS")
-    await interaction.response.send_message(embed=embed)  # عامة
+    commands_info = [
+        ("{emoji:playerplay} /extract", "يبدأ استخراج فصل كامل. كل عملية ناجحة تخصم **نقطة واحدة**."),
+        ("{emoji:settings} /setting", "لوحة تفاعلية لتغيير TXT/DOCX، مسافات الفقاعات، والمؤثرات الصوتية."),
+        ("{emoji:user} /profile", "يعرض نقاطك، حالتك، وعدد الاستخراجات بتنسيق واضح."),
+        ("{emoji:ticket} تجديد النقاط", "كل مستخدم يبدأ بـ **5 نقاط مجانية**. عند نفادها افتح تذكرة في السيرفر."),
+    ]
+    for name, value in commands_info:
+        embed.add_field(name=emojize(name), value=f"{value}\n{line()}", inline=False)
+    embed.set_footer(text="ZEUS Text • Markdown + Application Emojis")
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="setting", description="لوحة إعدادات استخراج النصوص")
+async def setting(interaction: discord.Interaction):
+    view = SettingsView(interaction.user)
+    await interaction.response.send_message(embed=view.embed(), view=view, ephemeral=True)
+
+@bot.tree.command(name="profile", description="عرض ملفك ونقاطك في بوت استخراج النصوص")
+async def profile(interaction: discord.Interaction):
+    profile_data = get_user_profile(interaction.user)
+    await interaction.response.send_message(embed=profile_embed(interaction.user, profile_data), ephemeral=True)
+
+admin_group = app_commands.Group(name="admin_text", description="إدارة مستخدمي ونقاط بوت استخراج النصوص")
+
+def owner_only(interaction):
+    return interaction.user.id == OWNER_ID
+
+@admin_group.command(name="users", description="عرض آخر المستخدمين المسجلين")
+@app_commands.check(owner_only)
+async def admin_users(interaction: discord.Interaction, limit: app_commands.Range[int, 1, 50] = 25):
+    users = list_user_profiles(limit)
+    body = "\n".join(
+        f"`{u.get('user_id')}` • **{u.get('display_name', u.get('username', 'Unknown'))}** • نقاط: `{u.get('points', 0)}` • استخراجات: `{u.get('total_extractions', 0)}` • {'محظور' if u.get('is_blocked') else 'نشط'}"
+        for u in users
+    ) or "لا يوجد مستخدمون بعد."
+    embed = themed_embed("{emoji:chartpie} مستخدمو بوت النصوص", f"## آخر المستخدمين\n{line()}\n{body}", "blue")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@admin_group.command(name="add_points", description="إضافة نقاط لمستخدم")
+@app_commands.check(owner_only)
+async def admin_add_points(interaction: discord.Interaction, user_id: str, amount: app_commands.Range[int, 1, 100000]):
+    profile_data = admin_adjust_user(user_id, points_delta=amount)
+    await interaction.response.send_message(f"{{emoji:circlecheck}} **تمت إضافة `{amount}` نقطة.** المتبقي الآن: `{profile_data.get('points', 0)}`", ephemeral=True)
+
+@admin_group.command(name="reset_points", description="تصفير أو ضبط نقاط مستخدم")
+@app_commands.check(owner_only)
+async def admin_reset_points(interaction: discord.Interaction, user_id: str, points: app_commands.Range[int, 0, 100000] = 0):
+    profile_data = admin_adjust_user(user_id, set_points=points)
+    await interaction.response.send_message(f"{{emoji:circlecheck}} **تم ضبط النقاط إلى `{profile_data.get('points', 0)}`.**", ephemeral=True)
+
+@admin_group.command(name="block", description="منع مستخدم من استخدام البوت")
+@app_commands.check(owner_only)
+async def admin_block(interaction: discord.Interaction, user_id: str):
+    admin_adjust_user(user_id, blocked=True)
+    await interaction.response.send_message("{emoji:lock} **تم منع المستخدم.**", ephemeral=True)
+
+@admin_group.command(name="unblock", description="فك منع مستخدم")
+@app_commands.check(owner_only)
+async def admin_unblock(interaction: discord.Interaction, user_id: str):
+    admin_adjust_user(user_id, blocked=False)
+    await interaction.response.send_message("{emoji:circlecheck} **تم فك المنع.**", ephemeral=True)
+
+bot.tree.add_command(admin_group)
 
 # ============================================================
 # أوامر مخفية للمالك
