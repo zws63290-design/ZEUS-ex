@@ -126,10 +126,12 @@ def emojize(value: Any):
     return emoji_manager.replace(value)
 
 def markdown_block(title: str, body: str) -> str:
-    return emojize(f"**{title}**\n---\n{body}")
+    return emojize(f"**{title}**\n\n---\n\n{body}")
 
 def themed_embed(title=None, description=None, color_name=None):
-    color = THEMES.get(color_name or emoji_manager.theme, THEMES["gold"])["color"]
+    # Theme policy: the text bot is gold-first; only explicit errors use red.
+    selected = "red" if color_name == "red" else "gold"
+    color = THEMES[selected]["color"]
     embed = discord.Embed(color=color, title=emojize(title) if title else None, description=emojize(description) if description else None)
     embed.timestamp = discord.utils.utcnow()
     return embed

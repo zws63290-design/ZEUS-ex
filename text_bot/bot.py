@@ -90,7 +90,7 @@ discord.abc.Messageable.send = _patched_messageable_send
 # ============================================================
 # عرض موحد للرسائل — Emojis + Markdown منسق
 # ============================================================
-RULE = "━━━━━━━━━━━━━━━━━━━━"
+RULE = "\n\n---\n\n"
 SUPPORT_SERVER_URL = os.getenv("SUPPORT_SERVER_URL", "").strip()
 
 def line():
@@ -98,6 +98,16 @@ def line():
 
 def fmt_bool(value):
     return "مفعّل" if value else "معطّل"
+
+
+def status_embed(title, description, *, error=False):
+    return themed_embed(title=title, description=description, color_name="red" if error else "gold")
+
+async def send_status(channel, title, description, *, error=False):
+    return await channel.send(embed=status_embed(title, description, error=error))
+
+async def edit_status(message, title, description, *, error=False):
+    await message.edit(embed=status_embed(title, description, error=error), content=None)
 
 def build_extraction_prompt(settings):
     spacing = "اترك سطرًا فارغًا بين كل فقاعة كلام." if settings.get("bubble_spacing", True) else "لا تترك أسطرًا فارغة بين الفقاعات؛ اجعل النص متتابعًا ومنظمًا."
@@ -1010,11 +1020,11 @@ async def extract(interaction: discord.Interaction):
         await interaction.followup.send("{emoji:clock} **انتهى الوقت، أعد الأمر مرة أخرى.**", ephemeral=True)
         return
 
-    status_msg = await interaction.channel.send(f"{emoji_manager.placeholder('clock')} **جاري قراءة المصدر...**\n{line()}\nلا تقلق، سأحدّث هذه الرسالة أثناء العمل.")
+    status_msg = await send_status(interaction.channel, "{emoji:clock} جاري قراءة المصدر", f"لا تقلق، سأحدّث هذه الرسالة أثناء العمل.{line()}")
     images = []
     if msg.attachments:
         if len(msg.attachments) > MAX_IMAGES_PER_REQUEST:
-            await status_msg.edit(content=f"{emoji_manager.placeholder('circlex')} **الحد الأقصى {MAX_IMAGES_PER_REQUEST} صور.**")
+            await edit_status(status_msg, "{emoji:circlex} خطأ", f"الحد الأقصى {MAX_IMAGES_PER_REQUEST} صور.", error=True)
             return
         for att in msg.attachments:
             if att.filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
@@ -1024,12 +1034,12 @@ async def extract(interaction: discord.Interaction):
                 data = await att.read()
                 images.extend(extract_images_from_zip_bytes(data))
             else:
-                await status_msg.edit(content=f"{emoji_manager.placeholder('circlex')} **الملف `{att.filename}` غير مدعوم.**")
+                await edit_status(status_msg, "{emoji:circlex} ملف غير مدعوم", f"الملف `{att.filename}` غير مدعوم.", error=True)
                 return
     elif msg.content.startswith("http"):
         link = msg.content.strip()
         try:
-            await status_msg.edit(content=f"{emoji_manager.placeholder('clock')} **جاري تحميل رابطك وفحص الصور...**\n{line()}\nقد يستغرق Google Drive وقتًا أطول حسب حجم الفصل.")
+            await edit_status(status_msg, "{emoji:clock} جاري تحميل الرابط", f"قد يستغرق Google Drive وقتًا أطول حسب حجم الفصل.{line()}")
             if "drive.google.com" in link:
                 images = await asyncio.to_thread(process_drive_link, link)
             else:
@@ -1039,18 +1049,18 @@ async def extract(interaction: discord.Interaction):
                 else:
                     images.append((data, "downloaded_image.jpg"))
         except Exception as e:
-            await status_msg.edit(content=f"{emoji_manager.placeholder('circlex')} **فشل معالجة الرابط:** `{str(e)}`")
+            await edit_status(status_msg, "{emoji:circlex} فشل معالجة الرابط", f"`{str(e)}`", error=True)
             return
     else:
-        await status_msg.edit(content="{emoji:circlex} **أرسل صورًا أو ملف ZIP أو رابطًا صالحًا.**")
+        await edit_status(status_msg, "{emoji:circlex} مصدر غير صالح", "أرسل صورًا أو ملف ZIP أو رابطًا صالحًا.", error=True)
         return
 
     if not images:
-        await status_msg.edit(content="{emoji:circlex} **لم يتم العثور على صور صالحة.**")
+        await edit_status(status_msg, "{emoji:circlex} لا توجد صور", "لم يتم العثور على صور صالحة.", error=True)
         return
 
     images.sort(key=lambda x: natural_sort_key(x[1]))
-    await status_msg.edit(content=f"{emoji_manager.placeholder('clock')} **بدأ الاستخراج الآن...**\n{line()}\nتم العثور على `{len(images)}` صورة.")
+    await edit_status(status_msg, "{emoji:clock} بدأ الاستخراج الآن", f"تم العثور على `{len(images)}` صورة.{line()}")
     combined_text = ""
     total_images = len(images)
     for idx, (img_bytes, img_name) in enumerate(images, start=1):
@@ -1065,14 +1075,14 @@ async def extract(interaction: discord.Interaction):
             )
             separator = f"\n\n{line()}\n## صورة {idx}\n{line()}\n\n"
             combined_text += separator + text
-            await status_msg.edit(content=f"{emoji_manager.placeholder('clock')} **المعالجة مستمرة...**\n{line()}\nتمت معالجة `{idx}` من `{total_images}` صورة.")
+            await edit_status(status_msg, "{emoji:clock} المعالجة مستمرة", f"تمت معالجة `{idx}` من `{total_images}` صورة.{line()}")
         except Exception as e:
-            await status_msg.edit(content=f"{emoji_manager.placeholder('circlex')} **حدث خطأ أثناء معالجة الصورة `{idx}`:** `{str(e)}`")
+            await edit_status(status_msg, "{emoji:circlex} خطأ أثناء المعالجة", f"الصورة `{idx}`: `{str(e)}`", error=True)
             return
 
     ok, profile_after = consume_point(user_id)
     if not ok:
-        await status_msg.edit(content=f"{emoji_manager.placeholder('circlex')} **لا توجد نقاط كافية لإرسال النتيجة.**")
+        await edit_status(status_msg, "{emoji:circlex} لا توجد نقاط", "لا توجد نقاط كافية لإرسال النتيجة.", error=True)
         return
 
     output_dir = BASE_DIR / "data"
@@ -1127,99 +1137,258 @@ async def profile(interaction: discord.Interaction):
     profile_data = get_user_profile(interaction.user)
     await interaction.response.send_message(embed=profile_embed(interaction.user, profile_data), ephemeral=True)
 
-admin_group = app_commands.Group(name="admin_text", description="إدارة مستخدمي ونقاط بوت استخراج النصوص")
+def parse_user_id(value):
+    match = re.search(r"(\d{15,22})", str(value))
+    if not match:
+        raise ValueError("missing user id")
+    return match.group(1)
 
-def owner_only(interaction):
-    return interaction.user.id == OWNER_ID
+class AdminActionModal(discord.ui.Modal):
+    def __init__(self, action):
+        super().__init__(title="لوحة التحكم")
+        self.action = action
+        self.user_id = discord.ui.TextInput(label="ID المستخدم", placeholder="123456789 أو منشن", required=True)
+        self.amount = discord.ui.TextInput(label="النقاط", placeholder="اتركها فارغة للحظر/فك الحظر", required=False)
+        self.add_item(self.user_id)
+        if action in {"add", "reset"}:
+            self.add_item(self.amount)
 
-@admin_group.command(name="users", description="عرض آخر المستخدمين المسجلين")
-@app_commands.check(owner_only)
-async def admin_users(interaction: discord.Interaction, limit: app_commands.Range[int, 1, 50] = 25):
-    users = list_user_profiles(limit)
-    body = "\n".join(
-        f"`{u.get('user_id')}` • **{u.get('display_name', u.get('username', 'Unknown'))}** • نقاط: `{u.get('points', 0)}` • استخراجات: `{u.get('total_extractions', 0)}` • {'محظور' if u.get('is_blocked') else 'نشط'}"
-        for u in users
-    ) or "لا يوجد مستخدمون بعد."
-    embed = themed_embed("{emoji:chartpie} مستخدمو بوت النصوص", f"## آخر المستخدمين\n{line()}\n{body}", "blue")
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-@admin_group.command(name="add_points", description="إضافة نقاط لمستخدم")
-@app_commands.check(owner_only)
-async def admin_add_points(interaction: discord.Interaction, user_id: str, amount: app_commands.Range[int, 1, 100000]):
-    profile_data = admin_adjust_user(user_id, points_delta=amount)
-    await interaction.response.send_message(f"{{emoji:circlecheck}} **تمت إضافة `{amount}` نقطة.** المتبقي الآن: `{profile_data.get('points', 0)}`", ephemeral=True)
-
-@admin_group.command(name="reset_points", description="تصفير أو ضبط نقاط مستخدم")
-@app_commands.check(owner_only)
-async def admin_reset_points(interaction: discord.Interaction, user_id: str, points: app_commands.Range[int, 0, 100000] = 0):
-    profile_data = admin_adjust_user(user_id, set_points=points)
-    await interaction.response.send_message(f"{{emoji:circlecheck}} **تم ضبط النقاط إلى `{profile_data.get('points', 0)}`.**", ephemeral=True)
-
-@admin_group.command(name="block", description="منع مستخدم من استخدام البوت")
-@app_commands.check(owner_only)
-async def admin_block(interaction: discord.Interaction, user_id: str):
-    admin_adjust_user(user_id, blocked=True)
-    await interaction.response.send_message("{emoji:lock} **تم منع المستخدم.**", ephemeral=True)
-
-@admin_group.command(name="unblock", description="فك منع مستخدم")
-@app_commands.check(owner_only)
-async def admin_unblock(interaction: discord.Interaction, user_id: str):
-    admin_adjust_user(user_id, blocked=False)
-    await interaction.response.send_message("{emoji:circlecheck} **تم فك المنع.**", ephemeral=True)
-
-bot.tree.add_command(admin_group)
-
-# ============================================================
-# أوامر مخفية للمالك
-# ============================================================
-@bot.tree.command(name="cfg", description="...")
-async def cfg(interaction: discord.Interaction):
-    if interaction.user.id != OWNER_ID:
-        await interaction.response.send_message("❌ ليس لديك صلاحية لاستخدام هذا الأمر.", ephemeral=True)
-        return
-
-    user_id = interaction.user.id
-    data = load_accounts_data(user_id)
-    if not data["accounts"]:
-        await interaction.response.defer(thinking=True)
+    async def on_submit(self, interaction: discord.Interaction):
+        if interaction.user.id != OWNER_ID:
+            await interaction.response.send_message("ليست مصرح لاستخدام الأمر.", ephemeral=True)
+            return
+        target = parse_user_id(str(self.user_id.value))
         try:
-            await asyncio.to_thread(create_and_save_new_account, user_id)
-            data = load_accounts_data(user_id)
-            view = AccountsView(user_id)
-            embed = themed_embed(
-                title="{emoji:user} إدارة الحسابات",
-                description="**تم إنشاء حساب أولي لك.**\n---\nيمكنك الآن اختيار الحساب وإدارته من الأزرار.",
-                color_name="blue",
-            )
-            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-        except Exception as e:
-            await interaction.followup.send(f"❌ فشل إنشاء حساب: {str(e)}", ephemeral=True)
-        return
+            amount = int(str(self.amount.value or "0"))
+        except ValueError:
+            await interaction.response.send_message("{emoji:circlex} قيمة النقاط غير صحيحة.", ephemeral=True)
+            return
+        if self.action == "add":
+            profile_data = admin_adjust_user(target, points_delta=amount)
+            msg = f"تمت إضافة `{amount}` نقطة. الرصيد: `{profile_data.get('points', 0)}`"
+        elif self.action == "reset":
+            profile_data = admin_adjust_user(target, set_points=amount)
+            msg = f"تم ضبط النقاط إلى `{profile_data.get('points', 0)}`"
+        elif self.action == "block":
+            admin_adjust_user(target, blocked=True)
+            msg = "تم منع المستخدم."
+        else:
+            admin_adjust_user(target, blocked=False)
+            msg = "تم فك منع المستخدم."
+        await interaction.response.send_message(f"{{emoji:circlecheck}} **{msg}**", ephemeral=True)
 
-    view = AccountsView(user_id)
-    embed = themed_embed(
-        title="{emoji:user} إدارة الحسابات",
-        description="**اختر حساباً لعرض التفاصيل أو القيام بإجراء.**\n---\nكل البيانات محفوظة في MongoDB.",
-        color_name="blue",
+class AdminPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=240)
+
+    async def interaction_check(self, interaction):
+        if interaction.user.id != OWNER_ID:
+            await interaction.response.send_message("ليست مصرح لاستخدام الأمر.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="المستخدمون", emoji=emoji_manager.placeholder("chartpie"), style=discord.ButtonStyle.primary)
+    async def users(self, interaction, button):
+        users = list_user_profiles(25)
+        body = "\n".join(f"`{u.get('user_id')}` • **{u.get('display_name', u.get('username', 'Unknown'))}** • `{u.get('points', 0)}` نقطة • {'محظور' if u.get('is_blocked') else 'نشط'}" for u in users) or "لا يوجد مستخدمون بعد."
+        await interaction.response.send_message(embed=themed_embed("{emoji:chartpie} آخر المستخدمين", f"{line()}{body}"), ephemeral=True)
+
+    @discord.ui.button(label="إضافة نقاط", emoji=emoji_manager.placeholder("star"), style=discord.ButtonStyle.success)
+    async def add(self, interaction, button):
+        await interaction.response.send_modal(AdminActionModal("add"))
+
+    @discord.ui.button(label="ضبط النقاط", emoji=emoji_manager.placeholder("adjustments"), style=discord.ButtonStyle.secondary)
+    async def reset(self, interaction, button):
+        await interaction.response.send_modal(AdminActionModal("reset"))
+
+    @discord.ui.button(label="منع", emoji=emoji_manager.placeholder("lock"), style=discord.ButtonStyle.danger)
+    async def block(self, interaction, button):
+        await interaction.response.send_modal(AdminActionModal("block"))
+
+    @discord.ui.button(label="فك المنع", emoji=emoji_manager.placeholder("shieldcheck"), style=discord.ButtonStyle.secondary)
+    async def unblock(self, interaction, button):
+        await interaction.response.send_modal(AdminActionModal("unblock"))
+
+    @discord.ui.button(label="حسابات OCR", emoji=emoji_manager.placeholder("user"), style=discord.ButtonStyle.primary, row=1)
+    async def ocr_accounts(self, interaction, button):
+        data = load_accounts_data(OWNER_ID)
+        if not data["accounts"]:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            try:
+                await asyncio.to_thread(create_and_save_new_account, OWNER_ID)
+            except Exception as e:
+                await interaction.followup.send(f"{{emoji:circlex}} فشل إنشاء حساب OCR: `{str(e)}`", ephemeral=True)
+                return
+            await interaction.followup.send(embed=themed_embed("{emoji:user} إدارة حسابات OCR", f"اختر حسابًا لإدارته.{line()}"), view=AccountsView(OWNER_ID), ephemeral=True)
+            return
+        await interaction.response.send_message(embed=themed_embed("{emoji:user} إدارة حسابات OCR", f"اختر حسابًا لإدارته.{line()}"), view=AccountsView(OWNER_ID), ephemeral=True)
+
+    @discord.ui.button(label="حالة OCR", emoji=emoji_manager.placeholder("infocircle"), style=discord.ButtonStyle.secondary, row=1)
+    async def ocr_status(self, interaction, button):
+        data = load_accounts_data(OWNER_ID)
+        now_ts = int(time.time())
+        active = sum(1 for a in data["accounts"] if a.get("ocr_limit_until", 0) <= now_ts)
+        total_uses = sum(a.get("ocr_count", 0) for a in data["accounts"])
+        embed = themed_embed("{emoji:chartpie} حالة OCR", f"إجمالي الحسابات: `{len(data['accounts'])}`\nنشطة: `{active}`\nالاستخدامات: `{total_uses}`{line()}")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+def admin_panel_embed():
+    return themed_embed(
+        "{emoji:layoutdashboard} لوحة التحكم",
+        f"# مركز إدارة بوت النصوص{line()}اختر الإجراء من الأزرار. كل العمليات مخفية ولا يراها إلا المالك."
     )
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-@bot.tree.command(name="info", description="...")
-async def info(interaction: discord.Interaction):
+@bot.tree.command(name="zx", description="...")
+async def zx(interaction: discord.Interaction):
     if interaction.user.id != OWNER_ID:
-        await interaction.response.send_message("❌ ليس لديك صلاحية لاستخدام هذا الأمر.", ephemeral=True)
+        await interaction.response.send_message("ليست مصرح لاستخدام الأمر.", ephemeral=True)
         return
-    user_id = interaction.user.id
-    data = load_accounts_data(user_id)
-    total = len(data["accounts"])
-    now_ts = int(time.time())
-    active = sum(1 for a in data["accounts"] if a.get("ocr_limit_until", 0) <= now_ts)
-    total_uses = sum(a.get("ocr_count", 0) for a in data["accounts"])
-    embed = themed_embed("{emoji:chartpie} حالة الحسابات", color_name="blue")
-    embed.add_field(name="إجمالي الحسابات", value=str(total))
-    embed.add_field(name="نشطة للمعالجة", value=str(active))
-    embed.add_field(name="إجمالي الاستخدامات", value=str(total_uses))
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.response.send_message(embed=admin_panel_embed(), view=AdminPanelView(), ephemeral=True)
+
+# ============================================================
+# أوامر Prefix بعلامة !
+# ============================================================
+@bot.command(name="help", aliases=["مساعدة", "اوامر"])
+async def prefix_help(ctx):
+    embed = themed_embed(
+        title="{emoji:photo} ZEUS Text Bot",
+        description=f"# مركز المساعدة{line()}استخدم `/extract` أو `!extract` للبدء، و`!اعدادات` للإعدادات، و`!بروفايل` للبروفايل."
+    )
+    await ctx.send(embed=embed)
+
+@bot.command(name="profile", aliases=["بروفايل"])
+async def prefix_profile(ctx):
+    profile_data = get_user_profile(ctx.author)
+    await ctx.send(embed=profile_embed(ctx.author, profile_data))
+
+@bot.command(name="setting", aliases=["settings", "اعدادات"])
+async def prefix_setting(ctx):
+    view = SettingsView(ctx.author)
+    await ctx.send(embed=view.embed(), view=view)
+
+@bot.command(name="extract", aliases=["استخراج"])
+async def prefix_extract(ctx):
+    user_id = ctx.author.id
+    profile = get_user_profile(ctx.author)
+    if profile.get("is_blocked"):
+        await ctx.reply("{emoji:lock} **تم منعك من استخدام البوت.**", mention_author=False)
+        return
+    if int(profile.get("points", 0)) <= 0:
+        await ctx.reply(f"{{emoji:circlex}} **لا تملك نقاطًا كافية.**{line()}كل فصل يستهلك نقطة واحدة.", mention_author=False)
+        return
+    settings = profile["settings"]
+    view = ModeSelectView(user_id)
+    await ctx.send(embed=themed_embed("{emoji:settings} اختر وضع المعالجة", f"اضغط أحد الأزرار للمتابعة.{line()}"), view=view)
+    await view.wait()
+    if not view.confirmed:
+        await ctx.send("{emoji:circlex} **تم إلغاء العملية.**")
+        return
+    await ctx.send(embed=themed_embed("{emoji:folderopen} أرسل ملفات الفصل الآن", f"صور مباشرة، ZIP، أو رابط Google Drive.{line()}"))
+    try:
+        msg = await bot.wait_for('message', check=lambda m: m.author == ctx.author and m.channel == ctx.channel, timeout=300)
+    except asyncio.TimeoutError:
+        await ctx.send("{emoji:clock} **انتهى الوقت، أعد الأمر مرة أخرى.**")
+        return
+    status_msg = await send_status(ctx.channel, "{emoji:clock} جاري قراءة المصدر", f"لا تقلق، سأحدّث هذه الرسالة أثناء العمل.{line()}")
+    images = []
+    try:
+        if msg.attachments:
+            if len(msg.attachments) > MAX_IMAGES_PER_REQUEST:
+                await edit_status(status_msg, "{emoji:circlex} خطأ", f"الحد الأقصى {MAX_IMAGES_PER_REQUEST} صور.", error=True)
+                return
+            for att in msg.attachments:
+                if att.filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+                    images.append((await att.read(), att.filename))
+                elif att.filename.lower().endswith(".zip"):
+                    images.extend(extract_images_from_zip_bytes(await att.read()))
+                else:
+                    await edit_status(status_msg, "{emoji:circlex} ملف غير مدعوم", f"`{att.filename}`", error=True)
+                    return
+        elif msg.content.startswith("http"):
+            await edit_status(status_msg, "{emoji:clock} جاري تحميل الرابط", f"قد يستغرق Google Drive وقتًا أطول.{line()}")
+            link = msg.content.strip()
+            if "drive.google.com" in link:
+                images = await asyncio.to_thread(process_drive_link, link)
+            else:
+                data = await asyncio.to_thread(download_image_from_url, link)
+                images = extract_images_from_zip_bytes(data) if zipfile.is_zipfile(io.BytesIO(data)) else [(data, "downloaded_image.jpg")]
+        else:
+            await edit_status(status_msg, "{emoji:circlex} مصدر غير صالح", "أرسل صورًا أو ZIP أو رابطًا صالحًا.", error=True)
+            return
+    except Exception as e:
+        await edit_status(status_msg, "{emoji:circlex} فشل قراءة المصدر", f"`{str(e)}`", error=True)
+        return
+    if not images:
+        await edit_status(status_msg, "{emoji:circlex} لا توجد صور", "لم يتم العثور على صور صالحة.", error=True)
+        return
+    images.sort(key=lambda x: natural_sort_key(x[1]))
+    await edit_status(status_msg, "{emoji:clock} بدأ الاستخراج", f"تم العثور على `{len(images)}` صورة.{line()}")
+    combined_text = ""
+    for idx, (img_bytes, img_name) in enumerate(images, start=1):
+        try:
+            text = await asyncio.to_thread(extract_text_from_single_image, user_id, img_bytes, img_name, view.thinking_enabled, settings)
+            combined_text += f"\n\n{line()}## صورة {idx}{line()}\n\n{text}"
+            await edit_status(status_msg, "{emoji:clock} المعالجة مستمرة", f"تمت معالجة `{idx}` من `{len(images)}` صورة.{line()}")
+        except Exception as e:
+            await edit_status(status_msg, "{emoji:circlex} خطأ أثناء المعالجة", f"الصورة `{idx}`: `{str(e)}`", error=True)
+            return
+    ok, profile_after = consume_point(user_id)
+    if not ok:
+        await edit_status(status_msg, "{emoji:circlex} لا توجد نقاط", "لا توجد نقاط كافية لإرسال النتيجة.", error=True)
+        return
+    output_dir = BASE_DIR / "data"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_format = settings.get("output_format", "txt")
+    filename = output_dir / f"extracted_{user_id}_{int(time.time())}.{output_format}"
+    if output_format == "docx":
+        filename.write_bytes(make_docx_bytes(combined_text).getvalue())
+    else:
+        filename.write_text(combined_text, encoding="utf-8")
+    await status_msg.delete()
+    await ctx.send(embed=themed_embed("{emoji:circlecheck} اكتمل الاستخراج", f"تم خصم نقطة واحدة. المتبقي: `{profile_after.get('points', 0)}`{line()}"), file=discord.File(str(filename)))
+    os.remove(filename)
+    increment_account_usage(user_id, "ocr")
+
+@bot.command(name="لوحة", aliases=["admin", "ادارة"])
+async def prefix_admin_panel(ctx):
+    if ctx.author.id != OWNER_ID:
+        await ctx.reply("ليست مصرح لاستخدام الأمر.", mention_author=False)
+        return
+    await ctx.send(embed=admin_panel_embed(), view=AdminPanelView())
+
+@bot.command(name="عطه", aliases=["addpoints"])
+async def prefix_add_points(ctx, target: str, amount: int):
+    if ctx.author.id != OWNER_ID:
+        await ctx.reply("ليست مصرح لاستخدام الأمر.", mention_author=False)
+        return
+    target_id = parse_user_id(target)
+    profile_data = admin_adjust_user(target_id, points_delta=amount)
+    await ctx.send(f"{{emoji:circlecheck}} **تمت إضافة `{amount}` نقطة. الرصيد: `{profile_data.get('points', 0)}`**")
+
+@bot.command(name="صفر", aliases=["setpoints"])
+async def prefix_set_points(ctx, target: str, amount: int = 0):
+    if ctx.author.id != OWNER_ID:
+        await ctx.reply("ليست مصرح لاستخدام الأمر.", mention_author=False)
+        return
+    target_id = parse_user_id(target)
+    profile_data = admin_adjust_user(target_id, set_points=amount)
+    await ctx.send(f"{{emoji:circlecheck}} **تم ضبط الرصيد إلى `{profile_data.get('points', 0)}`.**")
+
+@bot.command(name="منع", aliases=["blockuser"])
+async def prefix_block(ctx, target: str):
+    if ctx.author.id != OWNER_ID:
+        await ctx.reply("ليست مصرح لاستخدام الأمر.", mention_author=False)
+        return
+    admin_adjust_user(parse_user_id(target), blocked=True)
+    await ctx.send("{emoji:lock} **تم منع المستخدم.**")
+
+@bot.command(name="فك", aliases=["unblockuser"])
+async def prefix_unblock(ctx, target: str):
+    if ctx.author.id != OWNER_ID:
+        await ctx.reply("ليست مصرح لاستخدام الأمر.", mention_author=False)
+        return
+    admin_adjust_user(parse_user_id(target), blocked=False)
+    await ctx.send("{emoji:circlecheck} **تم فك منع المستخدم.**")
 
 # ============================================================
 # معالجة الأخطاء
