@@ -140,20 +140,23 @@ async def send_panel(destination, title=None, description=None, *, sections=None
 STATUS_HEARTBEAT_SECONDS = 20
 
 
-def _one_line(text):
-    return " ".join(str(text or "").split())
-
-
-def status_body(stage, detail=None, *, current=None, total=None, heartbeat=0):
-    progress = f"{current}/{total}" if current is not None and total else "..."
+def status_sections(stage, detail=None, *, current=None, total=None, heartbeat=0):
+    progress = f"`{current}/{total}`" if current is not None and total else "`...`"
     pulse = "·" * ((heartbeat % 3) + 1)
-    parts = [
-        f"{emoji_manager.placeholder('clock')} الحالة: {_one_line(emojize(stage))}",
-        f"{emoji_manager.placeholder('chartpie')} التقدم: {progress}{pulse}",
+    sections = [
+        f"{emoji_manager.placeholder('clock')} **الحالة:** {emojize(stage)}",
+        f"{emoji_manager.placeholder('chartpie')} **التقدم:** {progress} {pulse}",
+        f"{emoji_manager.placeholder('infocircle')} {emojize(detail) if detail else 'سأبقي هذه اللوحة محدثة أثناء التحميل والاستخراج.'}",
     ]
-    if detail:
-        parts.append(f"{emoji_manager.placeholder('infocircle')} {_one_line(emojize(detail))}")
-    return emojize(" | ".join(parts))[:1900]
+    return [emojize(section) for section in sections]
+
+
+def status_view(stage, detail=None, *, error=False, current=None, total=None, heartbeat=0):
+    return components_v2_panel(
+        title="{emoji:clock} مؤشر الاستخراج",
+        sections=status_sections(stage, detail, current=current, total=total, heartbeat=heartbeat),
+        error=error,
+    )
 
 
 class ExtractionStatus:
@@ -170,11 +173,22 @@ class ExtractionStatus:
         self._task = None
         self._lock = asyncio.Lock()
 
-    def content(self):
-        return status_body(self.title, self.description, current=self.current, total=self.total, heartbeat=self.heartbeat)
+    def view(self):
+        return status_view(self.title, self.description, error=self.error, current=self.current, total=self.total, heartbeat=self.heartbeat)
+
+    def fallback_embed(self):
+        return status_embed(
+            "{emoji:clock} مؤشر الاستخراج",
+            "\n".join(status_sections(self.title, self.description, current=self.current, total=self.total, heartbeat=self.heartbeat)),
+            error=self.error,
+        )
 
     async def start(self):
-        self.message = await self.channel.send(content=self.content())
+        view = self.view()
+        if view:
+            self.message = await self.channel.send(view=view)
+        else:
+            self.message = await self.channel.send(embed=self.fallback_embed())
         self._task = asyncio.create_task(self._heartbeat_loop())
         return self
 
@@ -197,9 +211,13 @@ class ExtractionStatus:
 
     async def _safe_update(self):
         async with self._lock:
+            view = self.view()
             try:
                 if self.message:
-                    await self.message.edit(content=self.content(), embeds=[], attachments=[], view=None)
+                    if view:
+                        await self.message.edit(content=None, embeds=[], attachments=[], view=view)
+                    else:
+                        await self.message.edit(content=None, embeds=[self.fallback_embed()], attachments=[], view=None)
                     return
             except (discord.NotFound, discord.Forbidden):
                 self.message = None
@@ -207,7 +225,10 @@ class ExtractionStatus:
                 print(f"[ExtractionStatus] edit failed, sending replacement: {exc}")
                 self.message = None
             try:
-                self.message = await self.channel.send(content=self.content())
+                if view:
+                    self.message = await self.channel.send(view=view)
+                else:
+                    self.message = await self.channel.send(embed=self.fallback_embed())
             except discord.HTTPException as exc:
                 print(f"[ExtractionStatus] replacement send failed: {exc}")
 
@@ -236,8 +257,11 @@ async def edit_status(status, title, description=None, *, error=False, current=N
         if error:
             await status.close()
         return
-    body = status_body(title, description, current=current, total=total)
-    await status.edit(content=body, embeds=[], attachments=[], view=None)
+    view = status_view(title, description, error=error, current=current, total=total)
+    if view:
+        await status.edit(content=None, embeds=[], attachments=[], view=view)
+    else:
+        await status.edit(content=None, embed=status_embed("{emoji:clock} مؤشر الاستخراج", "\n".join(status_sections(title, description, current=current, total=total)), error=error), view=None)
 
 def build_extraction_prompt(settings):
     spacing = "اترك سطرًا فارغًا بين كل فقاعة كلام." if settings.get("bubble_spacing", True) else "لا تترك أسطرًا فارغة بين الفقاعات؛ اجعل النص متتابعًا ومنظمًا."
