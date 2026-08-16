@@ -9,6 +9,7 @@ import discord
 BASE_DIR = Path(__file__).resolve().parents[1]
 REPO_DIR = BASE_DIR.parent
 SYSTEM_EMOJIS_JS = REPO_DIR / "utils" / "emojis.js"
+SYSTEM_EMOJIS_JSON = REPO_DIR / "utils" / "emojis.json"
 EMOJIS_JSON = BASE_DIR / "utils" / "emojis.json"
 ASSETS_DIR = BASE_DIR / "assets" / "emojis"
 PLACEHOLDER_RE = re.compile(r"\{emoji:([A-Za-z0-9_]+)\}")
@@ -42,20 +43,26 @@ class EmojiManager:
 
     def load_system_emojis(self):
         values = {}
-        if not SYSTEM_EMOJIS_JS.exists():
-            return values
-        text = SYSTEM_EMOJIS_JS.read_text(encoding="utf-8")
-        pattern = re.compile(r"(\w+):\s*\{\s*id:\s*'([0-9]{17,22})'.*?toString:\s*\(\)\s*=>\s*'(<a?:[^']+>)'", re.S)
-        for key, _emoji_id, rendered in pattern.findall(text):
-            values[key] = rendered
+        if SYSTEM_EMOJIS_JSON.exists():
+            try:
+                loaded = json.loads(SYSTEM_EMOJIS_JSON.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    values.update({k: v for k, v in loaded.items() if k != "__color__"})
+            except (OSError, json.JSONDecodeError) as exc:
+                print(f"[EmojiManager] failed to load root emojis json: {exc}")
+        if SYSTEM_EMOJIS_JS.exists():
+            text = SYSTEM_EMOJIS_JS.read_text(encoding="utf-8")
+            pattern = re.compile(r"(\w+):\s*\{\s*id:\s*'([0-9]{17,22})'.*?toString:\s*\(\)\s*=>\s*'(<a?:[^']+>)'", re.S)
+            for key, _emoji_id, rendered in pattern.findall(text):
+                values.setdefault(key, rendered)
         return values
 
     def load(self):
-        # The text bot must use the root system emoji table for messages and buttons.
-        # Do not merge text_bot/utils/emojis.json here: those copied application
-        # emojis can render as literal :b_name: text in normal messages when the
-        # bot cannot use that application emoji, and they also force blue button
-        # icons instead of the system/gold set.
+        # Match the root bot: placeholders are resolved from the root emoji table.
+        # Never merge text_bot/utils/emojis.json at runtime; text_bot may keep local
+        # assets, but copied text-bot emoji IDs can render as literal :b_name: text
+        # in messages and can make button icons use the wrong color set.
+        self.system_map = self.load_system_emojis()
         self.map = {"__color__": "system", **self.system_map}
         return self.map
 
@@ -123,7 +130,7 @@ class EmojiManager:
 
     def sync_application_emojis(self, bot_user_id: int, token: str):
         """Keep compatibility with the old text-bot sync command; root system IDs are preferred."""
-        return {"ok": True, "uploaded": 0, "mapped": len(self.system_map), "theme": "system", "reason": "using root utils/emojis.js"}
+        return {"ok": True, "uploaded": 0, "mapped": len(self.system_map), "theme": "system", "reason": "using root utils/emojis.json/js"}
 
 emoji_manager = EmojiManager()
 

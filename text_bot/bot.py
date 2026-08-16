@@ -62,9 +62,19 @@ bot.remove_command("help")
 # ============================================================
 # طبقة مركزية لاستبدال placeholders داخل رسائل discord.py
 # ============================================================
+def _emojize_discord_value(value):
+    if isinstance(value, discord.Embed):
+        return discord.Embed.from_dict(emojize(value.to_dict()))
+    if isinstance(value, list):
+        return [_emojize_discord_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_emojize_discord_value(item) for item in value)
+    return emojize(value)
+
+
 def _format_send_kwargs(args, kwargs):
-    args = tuple(emojize(arg) for arg in args)
-    kwargs = {key: emojize(value) for key, value in kwargs.items()}
+    args = tuple(_emojize_discord_value(arg) for arg in args)
+    kwargs = {key: _emojize_discord_value(value) for key, value in kwargs.items()}
     return args, kwargs
 
 _original_response_send_message = discord.InteractionResponse.send_message
@@ -85,6 +95,17 @@ async def _patched_messageable_send(self, *args, **kwargs):
     return await _original_messageable_send(self, *args, **kwargs)
 discord.abc.Messageable.send = _patched_messageable_send
 
+_original_response_edit_message = discord.InteractionResponse.edit_message
+async def _patched_response_edit_message(self, *args, **kwargs):
+    args, kwargs = _format_send_kwargs(args, kwargs)
+    return await _original_response_edit_message(self, *args, **kwargs)
+discord.InteractionResponse.edit_message = _patched_response_edit_message
+
+_original_message_edit = discord.Message.edit
+async def _patched_message_edit(self, *args, **kwargs):
+    args, kwargs = _format_send_kwargs(args, kwargs)
+    return await _original_message_edit(self, *args, **kwargs)
+discord.Message.edit = _patched_message_edit
 
 
 # ============================================================
@@ -851,7 +872,7 @@ def extract_images_from_zip_bytes(zip_bytes):
 # ============================================================
 class ModeSelectView(discord.ui.View):
     def __init__(self, user_id):
-        super().__init__(timeout=120)
+        super().__init__(timeout=900)
         self.user_id = user_id
         self.thinking_enabled = None
         self.confirmed = False
@@ -1210,7 +1231,7 @@ async def extract(interaction: discord.Interaction):
     await send_mode_selection(interaction.followup, view)
     await view.wait()
     if not view.confirmed:
-        await interaction.followup.send("{emoji:circlex} **تم إلغاء العملية.**", ephemeral=True)
+        await interaction.followup.send("{emoji:clock} **انتهى وقت اختيار وضع المعالجة. أعد تشغيل الأمر عندما تكون جاهزًا.**", ephemeral=True)
         return
     thinking_enabled = view.thinking_enabled
 
@@ -1501,7 +1522,7 @@ async def prefix_extract(ctx):
     await send_mode_selection(ctx, view)
     await view.wait()
     if not view.confirmed:
-        await ctx.send("{emoji:circlex} **تم إلغاء العملية.**")
+        await ctx.send("{emoji:clock} **انتهى وقت اختيار وضع المعالجة. أعد تشغيل الأمر عندما تكون جاهزًا.**")
         return
     await ctx.send(upload_prompt_text())
     try:
