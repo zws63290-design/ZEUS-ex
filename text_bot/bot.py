@@ -137,20 +137,107 @@ async def send_panel(destination, title=None, description=None, *, sections=None
     kwargs.update({"embed": embed, "view": view})
     return await destination.send(**kwargs)
 
-def status_body(stage, detail=None, *, current=None, total=None):
-    progress = f"`{current}/{total}`" if current is not None and total else "`...`"
-    lines = [f"{emoji_manager.placeholder('clock')} **الحالة:** {stage}", f"{emoji_manager.placeholder('chartpie')} **التقدم:** {progress}"]
+STATUS_HEARTBEAT_SECONDS = 20
+
+
+def _one_line(text):
+    return " ".join(str(text or "").split())
+
+
+def status_body(stage, detail=None, *, current=None, total=None, heartbeat=0):
+    progress = f"{current}/{total}" if current is not None and total else "..."
+    pulse = "·" * ((heartbeat % 3) + 1)
+    parts = [
+        f"{emoji_manager.placeholder('clock')} الحالة: {_one_line(emojize(stage))}",
+        f"{emoji_manager.placeholder('chartpie')} التقدم: {progress}{pulse}",
+    ]
     if detail:
-        lines.append(f"{emoji_manager.placeholder('infocircle')} {detail}")
-    return "\n".join(lines)
+        parts.append(f"{emoji_manager.placeholder('infocircle')} {_one_line(emojize(detail))}")
+    return emojize(" | ".join(parts))[:1900]
+
+
+class ExtractionStatus:
+    def __init__(self, channel, title, description=None, *, error=False, current=None, total=None):
+        self.channel = channel
+        self.message = None
+        self.title = title
+        self.description = description
+        self.error = error
+        self.current = current
+        self.total = total
+        self.heartbeat = 0
+        self._closed = False
+        self._task = None
+        self._lock = asyncio.Lock()
+
+    def content(self):
+        return status_body(self.title, self.description, current=self.current, total=self.total, heartbeat=self.heartbeat)
+
+    async def start(self):
+        self.message = await self.channel.send(content=self.content())
+        self._task = asyncio.create_task(self._heartbeat_loop())
+        return self
+
+    async def _heartbeat_loop(self):
+        while not self._closed:
+            await asyncio.sleep(STATUS_HEARTBEAT_SECONDS)
+            if self._closed:
+                break
+            self.heartbeat += 1
+            await self._safe_update()
+
+    async def update(self, title, description=None, *, error=False, current=None, total=None):
+        self.title = title
+        self.description = description
+        self.error = error
+        self.current = current
+        self.total = total
+        self.heartbeat += 1
+        await self._safe_update()
+
+    async def _safe_update(self):
+        async with self._lock:
+            try:
+                if self.message:
+                    await self.message.edit(content=self.content(), embeds=[], attachments=[], view=None)
+                    return
+            except (discord.NotFound, discord.Forbidden):
+                self.message = None
+            except discord.HTTPException as exc:
+                print(f"[ExtractionStatus] edit failed, sending replacement: {exc}")
+                self.message = None
+            try:
+                self.message = await self.channel.send(content=self.content())
+            except discord.HTTPException as exc:
+                print(f"[ExtractionStatus] replacement send failed: {exc}")
+
+    async def close(self, *, delete=False):
+        self._closed = True
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        if delete and self.message:
+            try:
+                await self.message.delete()
+            except discord.HTTPException:
+                pass
+
 
 async def send_status(channel, title, description=None, *, error=False, current=None, total=None):
-    body = status_body(emojize(title), description, current=current, total=total)
-    return await channel.send(embed=status_embed("{emoji:clock} مؤشر الاستخراج", body, error=error))
+    return await ExtractionStatus(channel, title, description, error=error, current=current, total=total).start()
 
-async def edit_status(message, title, description=None, *, error=False, current=None, total=None):
-    body = status_body(emojize(title), description, current=current, total=total)
-    await message.edit(embed=status_embed("{emoji:clock} مؤشر الاستخراج", body, error=error), content=None, view=None)
+
+async def edit_status(status, title, description=None, *, error=False, current=None, total=None):
+    if isinstance(status, ExtractionStatus):
+        await status.update(title, description, error=error, current=current, total=total)
+        if error:
+            await status.close()
+        return
+    body = status_body(title, description, current=current, total=total)
+    await status.edit(content=body, embeds=[], attachments=[], view=None)
 
 def build_extraction_prompt(settings):
     spacing = "اترك سطرًا فارغًا بين كل فقاعة كلام." if settings.get("bubble_spacing", True) else "لا تترك أسطرًا فارغة بين الفقاعات؛ اجعل النص متتابعًا ومنظمًا."
@@ -1194,7 +1281,7 @@ async def extract(interaction: discord.Interaction):
         filename.write_text(combined_text, encoding="utf-8")
 
     file = discord.File(str(filename))
-    await status_msg.delete()
+    await status_msg.close(delete=True)
     await send_panel(
         interaction.channel,
         sections=[
@@ -1456,7 +1543,7 @@ async def prefix_extract(ctx):
         filename.write_bytes(make_docx_bytes(combined_text).getvalue())
     else:
         filename.write_text(combined_text, encoding="utf-8")
-    await status_msg.delete()
+    await status_msg.close(delete=True)
     await send_panel(ctx.channel, sections=[f"## {emoji_manager.placeholder('circlecheck')} تم استخراج الفصل بنجاح", f"{emoji_manager.placeholder('photo')} تم إرفاق ملف `{filename.name}`.", f"{emoji_manager.placeholder('star')} تم خصم نقطة واحدة. المتبقي: `{profile_after.get('points', 0)}`."], content=f"{ctx.author.mention} {emoji_manager.placeholder('circlecheck')} انتهى استخراج الفصل.", file=discord.File(str(filename)))
     os.remove(filename)
     increment_account_usage(user_id, "ocr")

@@ -51,9 +51,18 @@ class EmojiManager:
         return values
 
     def load(self):
-        # The text bot intentionally mirrors the root system emoji table exactly.
-        # Ignore copied text_bot/utils/emojis.json values because they may belong to another bot/theme.
-        self.map = {"__color__": "system", **self.system_map}
+        # Prefer the root system emoji table, then use the text-bot emoji json only
+        # for keys that do not exist in the system table. This prevents normal
+        # Unicode fallbacks when the text bot has a custom emoji available.
+        local_map = {}
+        if EMOJIS_JSON.exists():
+            try:
+                loaded = json.loads(EMOJIS_JSON.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    local_map = {k: v for k, v in loaded.items() if k != "__color__"}
+            except (OSError, json.JSONDecodeError) as exc:
+                print(f"[EmojiManager] failed to load {EMOJIS_JSON}: {exc}")
+        self.map = {"__color__": "system", **local_map, **self.system_map}
         return self.map
 
     def save(self):
