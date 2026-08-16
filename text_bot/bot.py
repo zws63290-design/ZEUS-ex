@@ -125,6 +125,34 @@ def fmt_bool(value):
 def status_embed(title, description, *, error=False):
     return themed_embed(title=title, description=description, color_name="red" if error else "gold")
 
+SEPARATOR_MODES = {
+    "original_name": "اسم الصورة الأصلية",
+    "simple_index": "ترقيم بسيط",
+    "custom": "قالب مخصص",
+}
+DEFAULT_SEPARATOR_TEMPLATE = "## {name}"
+
+
+def output_separator(settings, idx, image_name):
+    mode = settings.get("separator_mode", "original_name")
+    safe_name = Path(image_name or f"صورة {idx}").name
+    if mode == "simple_index":
+        heading = f"## صورة {idx}"
+    elif mode == "custom":
+        template = (settings.get("separator_template") or DEFAULT_SEPARATOR_TEMPLATE).strip() or DEFAULT_SEPARATOR_TEMPLATE
+        heading = template.replace("{index}", str(idx)).replace("{name}", safe_name)
+    else:
+        heading = f"## {safe_name}"
+    return f"\n\n{line()}\n{heading}\n{line()}\n\n"
+
+
+def format_duration(seconds):
+    seconds = max(0, int(seconds))
+    minutes, seconds = divmod(seconds, 60)
+    if minutes:
+        return f"{minutes}د {seconds}ث"
+    return f"{seconds}ث"
+
 def _split_visual_rules(text):
     return [part.strip() for part in emojize(text or "").split(RULE) if part.strip()]
 
@@ -1144,6 +1172,11 @@ class SettingsView(discord.ui.View):
         sfx = settings.get("include_sfx", True)
         self.add_item(discord.ui.Button(label=f"المؤثرات الصوتية: {fmt_bool(sfx)}", emoji=emoji_manager.partial("music_play"), style=discord.ButtonStyle.secondary, custom_id="sfx", row=1))
         self.children[-1].callback = self.toggle_sfx
+        separator_mode = settings.get("separator_mode", "original_name")
+        self.add_item(discord.ui.Button(label=f"فاصل الصور: {SEPARATOR_MODES.get(separator_mode, SEPARATOR_MODES['original_name'])}", emoji=emoji_manager.partial("bookmark"), style=discord.ButtonStyle.secondary, custom_id="separator_mode", row=2))
+        self.children[-1].callback = self.cycle_separator_mode
+        self.add_item(discord.ui.Button(label="كتابة فاصل مخصص", emoji=emoji_manager.partial("adjustments"), style=discord.ButtonStyle.secondary, custom_id="separator_template", row=2))
+        self.children[-1].callback = self.open_separator_template
 
     async def _guard(self, interaction):
         if interaction.user.id != self.user.id:
@@ -1159,8 +1192,10 @@ class SettingsView(discord.ui.View):
                 f"## إعداداتك الحالية\n{line()}\n"
                 f"{emoji_manager.placeholder('folder')} **صيغة الملف:** `{s.get('output_format', 'txt').upper()}`\n"
                 f"{emoji_manager.placeholder('list')} **مسافات بين الفقاعات:** `{fmt_bool(s.get('bubble_spacing', True))}`\n"
-                f"{emoji_manager.placeholder('music_play')} **تضمين المؤثرات الصوتية:** `{fmt_bool(s.get('include_sfx', True))}`\n\n"
-                "غيّر الخيارات من الأزرار؛ سيتم تطبيقها تلقائيًا على `/extract`."
+                f"{emoji_manager.placeholder('music_play')} **تضمين المؤثرات الصوتية:** `{fmt_bool(s.get('include_sfx', True))}`\n"
+                f"{emoji_manager.placeholder('bookmark')} **فاصل الصور:** `{SEPARATOR_MODES.get(s.get('separator_mode', 'original_name'), SEPARATOR_MODES['original_name'])}`\n"
+                f"{emoji_manager.placeholder('adjustments')} **قالب الفاصل:** `{s.get('separator_template') or DEFAULT_SEPARATOR_TEMPLATE}`\n\n"
+                "استخدم `{name}` لاسم الصورة الأصلي و`{index}` لرقم الصورة عند كتابة فاصل مخصص."
             ),
             color_name="gold",
         )
@@ -1187,6 +1222,43 @@ class SettingsView(discord.ui.View):
         self._rebuild()
         await interaction.response.edit_message(embed=self.embed(), view=self)
 
+    async def cycle_separator_mode(self, interaction):
+        if not await self._guard(interaction):
+            return
+        order = ["original_name", "simple_index", "custom"]
+        current = self.profile["settings"].get("separator_mode", "original_name")
+        next_mode = order[(order.index(current) + 1) % len(order)] if current in order else "original_name"
+        self.profile = update_user_settings(self.user, separator_mode=next_mode)
+        self._rebuild()
+        await interaction.response.edit_message(embed=self.embed(), view=self)
+
+    async def open_separator_template(self, interaction):
+        if not await self._guard(interaction):
+            return
+        await interaction.response.send_modal(SeparatorTemplateModal(self))
+
+
+class SeparatorTemplateModal(discord.ui.Modal, title="فاصل صور مخصص"):
+    template = discord.ui.TextInput(
+        label="اكتب قالب الفاصل",
+        placeholder="مثال: ## صفحة {index} - {name}",
+        max_length=120,
+        required=True,
+    )
+
+    def __init__(self, settings_view):
+        super().__init__(timeout=180)
+        self.settings_view = settings_view
+        self.template.default = settings_view.profile["settings"].get("separator_template") or DEFAULT_SEPARATOR_TEMPLATE
+
+    async def on_submit(self, interaction):
+        if not await self.settings_view._guard(interaction):
+            return
+        value = str(self.template.value).strip() or DEFAULT_SEPARATOR_TEMPLATE
+        self.settings_view.profile = update_user_settings(self.settings_view.user, separator_mode="custom", separator_template=value)
+        self.settings_view._rebuild()
+        await interaction.response.edit_message(embed=self.settings_view.embed(), view=self.settings_view)
+
 
 def profile_embed(user, profile):
     settings = profile["settings"]
@@ -1199,7 +1271,8 @@ def profile_embed(user, profile):
             f"{emoji_manager.placeholder('shield')} **الحالة:** `{'محظور' if profile.get('is_blocked') else 'نشط'}`\n{line()}\n"
             f"{emoji_manager.placeholder('settings')} **الإخراج:** `{settings.get('output_format', 'txt').upper()}` | "
             f"**المسافات:** `{fmt_bool(settings.get('bubble_spacing', True))}` | "
-            f"**المؤثرات:** `{fmt_bool(settings.get('include_sfx', True))}`"
+            f"**المؤثرات:** `{fmt_bool(settings.get('include_sfx', True))}` | "
+            f"**الفاصل:** `{SEPARATOR_MODES.get(settings.get('separator_mode', 'original_name'), SEPARATOR_MODES['original_name'])}`"
         ),
         color_name="purple",
     )
@@ -1308,8 +1381,10 @@ async def extract(interaction: discord.Interaction):
         return
 
     images.sort(key=lambda x: natural_sort_key(x[1]))
+    extraction_started_at = time.monotonic()
     await edit_status(status_msg, "بدأ الاستخراج الآن", f"تم العثور على `{len(images)}` صورة.", current=0, total=len(images))
     combined_text = ""
+    empty_images = 0
     total_images = len(images)
     for idx, (img_bytes, img_name) in enumerate(images, start=1):
         try:
@@ -1321,8 +1396,9 @@ async def extract(interaction: discord.Interaction):
                 thinking_enabled,
                 settings
             )
-            separator = f"\n\n{line()}\n## صورة {idx}\n{line()}\n\n"
-            combined_text += separator + text
+            if not (text or "").strip():
+                empty_images += 1
+            combined_text += output_separator(settings, idx, img_name) + text
             await edit_status(status_msg, "المعالجة مستمرة", f"تمت معالجة الصورة `{idx}` من `{total_images}`.", current=idx, total=total_images)
         except Exception as e:
             await edit_status(status_msg, "{emoji:circlex} خطأ أثناء المعالجة", f"الصورة `{idx}`: `{str(e)}`", error=True)
@@ -1349,6 +1425,8 @@ async def extract(interaction: discord.Interaction):
         sections=[
             f"## {emoji_manager.placeholder('circlecheck')} تم استخراج الفصل بنجاح",
             f"{emoji_manager.placeholder('photo')} تمت معالجة `{total_images}` صورة وإرفاق ملف `{filename.name}`.",
+            f"{emoji_manager.placeholder('chartpie')} تقرير الجودة: الصور الفارغة `{empty_images}`، مدة المعالجة `{format_duration(time.monotonic() - extraction_started_at)}`، الصيغة `{output_format.upper()}`.",
+            f"{emoji_manager.placeholder('bookmark')} فاصل الإخراج: `{SEPARATOR_MODES.get(settings.get('separator_mode', 'original_name'), SEPARATOR_MODES['original_name'])}`.",
             f"{emoji_manager.placeholder('star')} تم خصم نقطة واحدة. المتبقي: `{profile_after.get('points', 0)}`.",
         ],
         content=f"{interaction.user.mention} {emoji_manager.placeholder('circlecheck')} انتهى استخراج الفصل.",
@@ -1364,7 +1442,7 @@ async def help_command(interaction: discord.Interaction):
         f"# {emoji_manager.placeholder('photo')} ZEUS Text Bot",
         "بوت احترافي لاستخراج نصوص المانجا والمانهوا مع نظام نقاط وإعدادات إخراج شخصية.",
         f"{emoji_manager.placeholder('playerplay')} **/extract**\nيبدأ استخراج فصل كامل. كل عملية ناجحة تخصم **نقطة واحدة**.",
-        f"{emoji_manager.placeholder('settings')} **/setting**\nلوحة تفاعلية لتغيير TXT/DOCX، مسافات الفقاعات، والمؤثرات الصوتية.",
+        f"{emoji_manager.placeholder('settings')} **/setting**\nلوحة تفاعلية لتغيير TXT/DOCX، مسافات الفقاعات، المؤثرات الصوتية، وفواصل الصور.",
         f"{emoji_manager.placeholder('user')} **/profile**\nيعرض بروفايلك أو بروفايل شخص آخر بشكل عام مع صورة المستخدم.",
         f"{emoji_manager.placeholder('ticket')} **تجديد النقاط**\nكل مستخدم يبدأ بـ **5 نقاط مجانية**. عند نفادها افتح تذكرة في السيرفر.",
     ]
@@ -1583,12 +1661,16 @@ async def prefix_extract(ctx):
         await edit_status(status_msg, "{emoji:circlex} لا توجد صور", "لم يتم العثور على صور صالحة.", error=True)
         return
     images.sort(key=lambda x: natural_sort_key(x[1]))
+    extraction_started_at = time.monotonic()
     await edit_status(status_msg, "بدأ الاستخراج", f"تم العثور على `{len(images)}` صورة.", current=0, total=len(images))
     combined_text = ""
+    empty_images = 0
     for idx, (img_bytes, img_name) in enumerate(images, start=1):
         try:
             text = await asyncio.to_thread(extract_text_from_single_image, user_id, img_bytes, img_name, view.thinking_enabled, settings)
-            combined_text += f"\n\n{line()}## صورة {idx}{line()}\n\n{text}"
+            if not (text or "").strip():
+                empty_images += 1
+            combined_text += output_separator(settings, idx, img_name) + text
             await edit_status(status_msg, "المعالجة مستمرة", f"تمت معالجة الصورة `{idx}` من `{len(images)}`.", current=idx, total=len(images))
         except Exception as e:
             await edit_status(status_msg, "{emoji:circlex} خطأ أثناء المعالجة", f"الصورة `{idx}`: `{str(e)}`", error=True)
@@ -1606,7 +1688,18 @@ async def prefix_extract(ctx):
     else:
         filename.write_text(combined_text, encoding="utf-8")
     await status_msg.close(delete=True)
-    await send_panel(ctx.channel, sections=[f"## {emoji_manager.placeholder('circlecheck')} تم استخراج الفصل بنجاح", f"{emoji_manager.placeholder('photo')} تم إرفاق ملف `{filename.name}`.", f"{emoji_manager.placeholder('star')} تم خصم نقطة واحدة. المتبقي: `{profile_after.get('points', 0)}`."], content=f"{ctx.author.mention} {emoji_manager.placeholder('circlecheck')} انتهى استخراج الفصل.", file=discord.File(str(filename)))
+    await send_panel(
+        ctx.channel,
+        sections=[
+            f"## {emoji_manager.placeholder('circlecheck')} تم استخراج الفصل بنجاح",
+            f"{emoji_manager.placeholder('photo')} تمت معالجة `{len(images)}` صورة وإرفاق ملف `{filename.name}`.",
+            f"{emoji_manager.placeholder('chartpie')} تقرير الجودة: الصور الفارغة `{empty_images}`، مدة المعالجة `{format_duration(time.monotonic() - extraction_started_at)}`، الصيغة `{output_format.upper()}`.",
+            f"{emoji_manager.placeholder('bookmark')} فاصل الإخراج: `{SEPARATOR_MODES.get(settings.get('separator_mode', 'original_name'), SEPARATOR_MODES['original_name'])}`.",
+            f"{emoji_manager.placeholder('star')} تم خصم نقطة واحدة. المتبقي: `{profile_after.get('points', 0)}`.",
+        ],
+        content=f"{ctx.author.mention} {emoji_manager.placeholder('circlecheck')} انتهى استخراج الفصل.",
+        file=discord.File(str(filename)),
+    )
     os.remove(filename)
     increment_account_usage(user_id, "ocr")
 

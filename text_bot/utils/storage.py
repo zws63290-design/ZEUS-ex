@@ -18,6 +18,8 @@ _DEFAULT_PROFILE = {
         "output_format": "txt",
         "bubble_spacing": True,
         "include_sfx": True,
+        "separator_mode": "original_name",
+        "separator_template": "## {name}",
     },
 }
 _CLIENT = None
