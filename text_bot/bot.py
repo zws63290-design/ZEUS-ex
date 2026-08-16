@@ -52,7 +52,7 @@ from utils.storage import (
     save_accounts_data,
     update_user_settings,
 )
-from utils.emojis import emoji_manager, emojize, themed_embed, markdown_block
+from utils.emojis import THEMES, emoji_manager, emojize, themed_embed, markdown_block
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -91,6 +91,7 @@ discord.abc.Messageable.send = _patched_messageable_send
 # عرض موحد للرسائل — Emojis + Markdown منسق
 # ============================================================
 RULE = "\n\n---\n\n"
+V2_SEPARATOR_SUPPORTED = all(hasattr(discord.ui, name) for name in ("LayoutView", "Container", "TextDisplay", "Separator"))
 SUPPORT_SERVER_URL = os.getenv("SUPPORT_SERVER_URL", "").strip()
 
 def line():
@@ -103,11 +104,35 @@ def fmt_bool(value):
 def status_embed(title, description, *, error=False):
     return themed_embed(title=title, description=description, color_name="red" if error else "gold")
 
+def _split_visual_rules(text):
+    return [part.strip() for part in emojize(text or "").split(RULE)]
+
+def components_v2_panel(title, description, *, error=False):
+    """Build a Components V2 panel so RULE renders as real Separator lines."""
+    if not V2_SEPARATOR_SUPPORTED:
+        return None
+    container = discord.ui.Container(accent_colour=discord.Colour.red() if error else discord.Colour(THEMES["gold"]["color"]))
+    container.add_item(discord.ui.TextDisplay(f"## {emojize(title)}"))
+    for part in _split_visual_rules(description):
+        container.add_item(discord.ui.Separator(visible=True))
+        if part:
+            container.add_item(discord.ui.TextDisplay(part))
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(container)
+    return view
+
 async def send_status(channel, title, description, *, error=False):
+    view = components_v2_panel(title, description, error=error)
+    if view:
+        return await channel.send(view=view)
     return await channel.send(embed=status_embed(title, description, error=error))
 
 async def edit_status(message, title, description, *, error=False):
-    await message.edit(embed=status_embed(title, description, error=error), content=None)
+    view = components_v2_panel(title, description, error=error)
+    if view:
+        await message.edit(content=None, embed=None, view=view)
+        return
+    await message.edit(embed=status_embed(title, description, error=error), content=None, view=None)
 
 def build_extraction_prompt(settings):
     spacing = "اترك سطرًا فارغًا بين كل فقاعة كلام." if settings.get("bubble_spacing", True) else "لا تترك أسطرًا فارغة بين الفقاعات؛ اجعل النص متتابعًا ومنظمًا."
@@ -675,7 +700,7 @@ class ModeSelectView(discord.ui.View):
         self.thinking_enabled = None
         self.confirmed = False
 
-    @discord.ui.button(label="✅ دقة عالية", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="دقة عالية", emoji=emoji_manager.placeholder("circlecheck"), style=discord.ButtonStyle.secondary)
     async def high_accuracy(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("هذا الزر ليس لك.", ephemeral=True)
@@ -685,7 +710,7 @@ class ModeSelectView(discord.ui.View):
         await interaction.response.defer()
         self.stop()
 
-    @discord.ui.button(label="⚡ سرعة عالية", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="سرعة عالية", emoji=emoji_manager.placeholder("bolt"), style=discord.ButtonStyle.secondary)
     async def high_speed(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("هذا الزر ليس لك.", ephemeral=True)
@@ -721,7 +746,7 @@ class AccountsView(discord.ui.View):
             real_idx = start + idx
             status = ""
             if data["active_ocr_index"] == real_idx:
-                status += "📖 "
+                status += "نشط"
             btn = discord.ui.Button(
                 label=f"حساب {real_idx + 1} {status}",
                 style=discord.ButtonStyle.secondary,
@@ -732,19 +757,19 @@ class AccountsView(discord.ui.View):
             self.add_item(btn)
 
         if self.page > 0:
-            prev_btn = discord.ui.Button(label="⬅️ السابق", style=discord.ButtonStyle.primary, custom_id="prev", row=1)
+            prev_btn = discord.ui.Button(label="السابق", emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="prev", row=1)
             prev_btn.callback = self.prev_page
             self.add_item(prev_btn)
         if end < len(accounts):
-            next_btn = discord.ui.Button(label="التالي ➡️", style=discord.ButtonStyle.primary, custom_id="next", row=1)
+            next_btn = discord.ui.Button(label="التالي", emoji="➡️", style=discord.ButtonStyle.secondary, custom_id="next", row=1)
             next_btn.callback = self.next_page
             self.add_item(next_btn)
 
-        create_btn = discord.ui.Button(label="➕ إنشاء حساب", style=discord.ButtonStyle.success, custom_id="create", row=1)
+        create_btn = discord.ui.Button(label="إنشاء حساب", emoji=emoji_manager.placeholder("circlecheck"), style=discord.ButtonStyle.secondary, custom_id="create", row=1)
         create_btn.callback = self.create_account
         self.add_item(create_btn)
 
-        status_btn = discord.ui.Button(label="📊 الحالة", style=discord.ButtonStyle.secondary, custom_id="status", row=1)
+        status_btn = discord.ui.Button(label="الحالة", emoji=emoji_manager.placeholder("chartpie"), style=discord.ButtonStyle.secondary, custom_id="status", row=1)
         status_btn.callback = self.show_status
         self.add_item(status_btn)
 
@@ -780,9 +805,9 @@ class AccountsView(discord.ui.View):
         try:
             await asyncio.to_thread(create_and_save_new_account, self.user_id)
             self.update_buttons()
-            await interaction.followup.send("✅ تم إنشاء حساب جديد بنجاح.", ephemeral=True)
+            await interaction.followup.send("{emoji:circlecheck} تم إنشاء حساب جديد بنجاح.", ephemeral=True)
         except Exception as e:
-            await interaction.followup.send(f"❌ فشل: {str(e)}", ephemeral=True)
+            await interaction.followup.send(f"{{emoji:circlex}} فشل: {str(e)}", ephemeral=True)
 
     async def show_status(self, interaction: discord.Interaction):
         if interaction.user.id != self.user_id:
@@ -804,11 +829,11 @@ class AccountsView(discord.ui.View):
             return
         acc = data["accounts"][idx]
         embed = themed_embed(f"{emoji_manager.placeholder('user')} تفاصيل الحساب {idx + 1}", color_name="green")
-        embed.add_field(name="📧 البريد", value=acc["email"][:40], inline=False)
-        embed.add_field(name="🔐 التوكن", value=acc["token"][:30] + "...", inline=False)
+        embed.add_field(name=emojize("{emoji:mail} البريد"), value=acc["email"][:40], inline=False)
+        embed.add_field(name=emojize("{emoji:lock} التوكن"), value=acc["token"][:30] + "...", inline=False)
         ocr_limit = acc.get("ocr_limit_until", 0)
-        embed.add_field(name="📖 حالة الخدمة", value=get_remaining_time(ocr_limit), inline=True)
-        embed.add_field(name="📊 عدد الاستخدامات", value=str(acc.get("ocr_count", 0)), inline=True)
+        embed.add_field(name=emojize("{emoji:bookmark} حالة الخدمة"), value=get_remaining_time(ocr_limit), inline=True)
+        embed.add_field(name=emojize("{emoji:chartpie} عدد الاستخدامات"), value=str(acc.get("ocr_count", 0)), inline=True)
         view = AccountDetailView(self.user_id, idx)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
@@ -818,7 +843,7 @@ class AccountDetailView(discord.ui.View):
         self.user_id = user_id
         self.acc_idx = acc_idx
 
-    @discord.ui.button(label="📖 تعيين كخدمة نشطة", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="تعيين كخدمة نشطة", emoji=emoji_manager.placeholder("bookmark"), style=discord.ButtonStyle.secondary)
     async def set_active(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("هذه القائمة ليست لك.", ephemeral=True)
@@ -828,11 +853,11 @@ class AccountDetailView(discord.ui.View):
             data["active_ocr_index"] = self.acc_idx
             data["accounts"][self.acc_idx]["ocr_limit_until"] = 0
             save_accounts_data(self.user_id, data)
-            await interaction.response.send_message("✅ تم تعيين الحساب كخدمة نشطة.", ephemeral=True)
+            await interaction.response.send_message("{emoji:circlecheck} تم تعيين الحساب كخدمة نشطة.", ephemeral=True)
         else:
             await interaction.response.send_message("الحساب غير موجود.", ephemeral=True)
 
-    @discord.ui.button(label="🔄 تجديد التوكن", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="تجديد التوكن", emoji=emoji_manager.placeholder("clock"), style=discord.ButtonStyle.secondary)
     async def refresh_token(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("هذه القائمة ليست لك.", ephemeral=True)
@@ -844,13 +869,13 @@ class AccountDetailView(discord.ui.View):
             if new_token:
                 data["accounts"][self.acc_idx]["token"] = new_token
                 save_accounts_data(self.user_id, data)
-                await interaction.response.send_message("✅ تم تجديد التوكن.", ephemeral=True)
+                await interaction.response.send_message("{emoji:circlecheck} تم تجديد التوكن.", ephemeral=True)
             else:
-                await interaction.response.send_message("❌ فشل تجديد التوكن.", ephemeral=True)
+                await interaction.response.send_message("{emoji:circlex} فشل تجديد التوكن.", ephemeral=True)
         else:
             await interaction.response.send_message("الحساب غير موجود.", ephemeral=True)
 
-    @discord.ui.button(label="🔓 فك الحظر", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="فك الحظر", emoji=emoji_manager.placeholder("tv_unlock"), style=discord.ButtonStyle.secondary)
     async def unban(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("هذه القائمة ليست لك.", ephemeral=True)
@@ -859,11 +884,11 @@ class AccountDetailView(discord.ui.View):
         if self.acc_idx < len(data["accounts"]):
             data["accounts"][self.acc_idx]["ocr_limit_until"] = 0
             save_accounts_data(self.user_id, data)
-            await interaction.response.send_message("✅ تم فك الحظر.", ephemeral=True)
+            await interaction.response.send_message("{emoji:circlecheck} تم فك الحظر.", ephemeral=True)
         else:
             await interaction.response.send_message("الحساب غير موجود.", ephemeral=True)
 
-    @discord.ui.button(label="🗑️ حذف الحساب", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="حذف الحساب", emoji=emoji_manager.placeholder("trash"), style=discord.ButtonStyle.secondary)
     async def delete_account(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("هذه القائمة ليست لك.", ephemeral=True)
@@ -874,7 +899,7 @@ class AccountDetailView(discord.ui.View):
             if data["active_ocr_index"] >= len(data["accounts"]):
                 data["active_ocr_index"] = -1
             save_accounts_data(self.user_id, data)
-            await interaction.response.send_message("🗑️ تم حذف الحساب.", ephemeral=True)
+            await interaction.response.send_message("{emoji:trash} تم حذف الحساب.", ephemeral=True)
         else:
             await interaction.response.send_message("الحساب غير موجود.", ephemeral=True)
 
@@ -893,13 +918,13 @@ class SettingsView(discord.ui.View):
         self.clear_items()
         settings = self.profile["settings"]
         fmt = settings.get("output_format", "txt")
-        self.add_item(discord.ui.Button(label=f"صيغة الملف: {fmt.upper()}", emoji=emoji_manager.placeholder("folder"), style=discord.ButtonStyle.primary if fmt == "txt" else discord.ButtonStyle.success, custom_id="fmt", row=0))
+        self.add_item(discord.ui.Button(label=f"صيغة الملف: {fmt.upper()}", emoji=emoji_manager.placeholder("folder"), style=discord.ButtonStyle.secondary, custom_id="fmt", row=0))
         self.children[-1].callback = self.toggle_format
         spacing = settings.get("bubble_spacing", True)
-        self.add_item(discord.ui.Button(label=f"مسافات الفقاعات: {fmt_bool(spacing)}", emoji=emoji_manager.placeholder("list"), style=discord.ButtonStyle.success if spacing else discord.ButtonStyle.secondary, custom_id="spacing", row=1))
+        self.add_item(discord.ui.Button(label=f"مسافات الفقاعات: {fmt_bool(spacing)}", emoji=emoji_manager.placeholder("list"), style=discord.ButtonStyle.secondary, custom_id="spacing", row=1))
         self.children[-1].callback = self.toggle_spacing
         sfx = settings.get("include_sfx", True)
-        self.add_item(discord.ui.Button(label=f"المؤثرات الصوتية: {fmt_bool(sfx)}", emoji=emoji_manager.placeholder("music_play"), style=discord.ButtonStyle.success if sfx else discord.ButtonStyle.secondary, custom_id="sfx", row=1))
+        self.add_item(discord.ui.Button(label=f"المؤثرات الصوتية: {fmt_bool(sfx)}", emoji=emoji_manager.placeholder("music_play"), style=discord.ButtonStyle.secondary, custom_id="sfx", row=1))
         self.children[-1].callback = self.toggle_sfx
 
     async def _guard(self, interaction):
@@ -1187,13 +1212,13 @@ class AdminPanelView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="المستخدمون", emoji=emoji_manager.placeholder("chartpie"), style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="المستخدمون", emoji=emoji_manager.placeholder("chartpie"), style=discord.ButtonStyle.secondary)
     async def users(self, interaction, button):
         users = list_user_profiles(25)
         body = "\n".join(f"`{u.get('user_id')}` • **{u.get('display_name', u.get('username', 'Unknown'))}** • `{u.get('points', 0)}` نقطة • {'محظور' if u.get('is_blocked') else 'نشط'}" for u in users) or "لا يوجد مستخدمون بعد."
         await interaction.response.send_message(embed=themed_embed("{emoji:chartpie} آخر المستخدمين", f"{line()}{body}"), ephemeral=True)
 
-    @discord.ui.button(label="إضافة نقاط", emoji=emoji_manager.placeholder("star"), style=discord.ButtonStyle.success)
+    @discord.ui.button(label="إضافة نقاط", emoji=emoji_manager.placeholder("star"), style=discord.ButtonStyle.secondary)
     async def add(self, interaction, button):
         await interaction.response.send_modal(AdminActionModal("add"))
 
@@ -1201,7 +1226,7 @@ class AdminPanelView(discord.ui.View):
     async def reset(self, interaction, button):
         await interaction.response.send_modal(AdminActionModal("reset"))
 
-    @discord.ui.button(label="منع", emoji=emoji_manager.placeholder("lock"), style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="منع", emoji=emoji_manager.placeholder("lock"), style=discord.ButtonStyle.secondary)
     async def block(self, interaction, button):
         await interaction.response.send_modal(AdminActionModal("block"))
 
@@ -1209,7 +1234,7 @@ class AdminPanelView(discord.ui.View):
     async def unblock(self, interaction, button):
         await interaction.response.send_modal(AdminActionModal("unblock"))
 
-    @discord.ui.button(label="حسابات OCR", emoji=emoji_manager.placeholder("user"), style=discord.ButtonStyle.primary, row=1)
+    @discord.ui.button(label="حسابات OCR", emoji=emoji_manager.placeholder("user"), style=discord.ButtonStyle.secondary, row=1)
     async def ocr_accounts(self, interaction, button):
         data = load_accounts_data(OWNER_ID)
         if not data["accounts"]:

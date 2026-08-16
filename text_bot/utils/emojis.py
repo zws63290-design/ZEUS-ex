@@ -15,6 +15,7 @@ EMOJIS_JSON = BASE_DIR / "utils" / "emojis.json"
 ASSETS_DIR = BASE_DIR / "assets" / "emojis"
 PLACEHOLDER_RE = re.compile(r"\{emoji:([A-Za-z0-9_]+)\}")
 CUSTOM_RE = re.compile(r"^<a?:[A-Za-z0-9_]{2,32}:\d{17,22}>$")
+LEGACY_COLON_RE = re.compile(r"^:[A-Za-z0-9_]{2,32}:$")
 THEMES = {
     "blue": {"prefix": "b", "color": 0x5865F2},
     "red": {"prefix": "r", "color": 0xED4245},
@@ -58,9 +59,26 @@ class EmojiManager:
         EMOJIS_JSON.write_text(json.dumps(ordered, ensure_ascii=False, indent=4) + "\n", encoding="utf-8")
         self.map = ordered
 
+    def _format_custom_emoji(self, value):
+        if isinstance(value, dict):
+            emoji_id = str(value.get("id", "")).strip()
+            emoji_name = str(value.get("name", "")).strip()
+            animated = bool(value.get("animated"))
+            if emoji_id and emoji_name:
+                return f"<{'a' if animated else ''}:{emoji_name}:{emoji_id}>"
+        if isinstance(value, str):
+            value = value.strip()
+            if CUSTOM_RE.match(value):
+                return value
+            # Discord bots cannot render legacy :name: custom emoji text.
+            if LEGACY_COLON_RE.match(value):
+                return ""
+            return value
+        return ""
+
     def get(self, name):
-        value = self.map.get(name)
-        if isinstance(value, str) and value.strip():
+        value = self._format_custom_emoji(self.map.get(name))
+        if value:
             return value
         return FALLBACKS.get(name, "")
 
