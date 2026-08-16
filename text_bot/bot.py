@@ -921,14 +921,22 @@ async def send_mode_selection(destination, view):
         return await destination.send(content=emojize("{emoji:settings} **اختر الوضع من الأزرار بالأسفل:**"), view=view)
     return await destination.send(embed=themed_embed(description="\n\n".join(mode_selection_sections())), view=view)
 
+def upload_prompt_sections():
+    return [
+        f"## {emoji_manager.placeholder('folderopen')} خطوة إرفاق صور الفصل.",
+        "## توجد ثلاث طرق لكي ترسل صور فصلك.",
+        f"{emoji_manager.placeholder('photo')} **الطريقة الأولى:** إرفاق ما يصل إلى `{MAX_IMAGES_PER_REQUEST}` صور مباشرة في نفس الرسالة، مع ترتيب الصور بالأرقام قبل الإرسال.",
+        f"{emoji_manager.placeholder('folder')} **الطريقة الثانية:** إرسال ملف ZIP بداخله صور الفصل مرتبة بأسمائها.",
+        f"{emoji_manager.placeholder('folderopen')} **الطريقة الثالثة:** إرسال رابط Google Drive يحتوي على صور الفصل مرتبة بأسمائها.",
+    ]
+
+
 def upload_prompt_text():
-    return (
-        f"## {emoji_manager.placeholder('folderopen')} خطوة إرفاق صور الفصل.\n"
-        "توجد ثلاث طرق لكي ترسل صور فصلك.\n"
-        f"{emoji_manager.placeholder('photo')} **الطريقة الأولى:** إرفاق ما يصل إلى `{MAX_IMAGES_PER_REQUEST}` صور مباشرة في نفس الرسالة، مع ترتيب الصور بأسمائها قبل الإرسال.\n"
-        f"{emoji_manager.placeholder('folder')} **الطريقة الثانية:** إرسال ملف ZIP بداخله صور الفصل مرتبة بأسمائها.\n"
-        f"{emoji_manager.placeholder('folderopen')} **الطريقة الثالثة:** إرسال رابط Google Drive يحتوي على صور الفصل مرتبة بأسمائها."
-    )
+    return "\n".join(upload_prompt_sections())
+
+
+async def send_upload_prompt(destination):
+    return await send_panel(destination, sections=upload_prompt_sections())
 
 # ============================================================
 # الواجهة التفاعلية لإدارة الحسابات
@@ -1244,7 +1252,7 @@ async def extract(interaction: discord.Interaction):
         return
     thinking_enabled = view.thinking_enabled
 
-    await interaction.followup.send(upload_prompt_text())
+    await send_upload_prompt(interaction.followup)
 
     try:
         msg = await bot.wait_for(
@@ -1533,7 +1541,7 @@ async def prefix_extract(ctx):
     if not view.confirmed:
         await ctx.send("{emoji:clock} **انتهى وقت اختيار وضع المعالجة. أعد تشغيل الأمر عندما تكون جاهزًا.**")
         return
-    await ctx.send(upload_prompt_text())
+    await send_upload_prompt(ctx)
     try:
         msg = await bot.wait_for('message', check=lambda m: m.author == ctx.author and m.channel == ctx.channel, timeout=300)
     except asyncio.TimeoutError:
