@@ -19,15 +19,14 @@ python bot.py
 - `MONGODB_URI`: رابط MongoDB، وهو مطلوب للتخزين.
 - `MONGODB_DB`: اسم قاعدة البيانات، افتراضيًا `text_extractor_bot`.
 - `TEMP_API_URL` و `GDRIVE_API_KEY`: مفاتيح الخدمات الخارجية.
-- `EMOJI_THEME`: أحد `gold`, `blue`, `red`, `green`, `purple`, `pink`.
-- `SYNC_APPLICATION_EMOJIS=true`: يفعّل مزامنة Application Emojis عند الجاهزية.
+- `SYNC_APPLICATION_EMOJIS`: يفعّل مزامنة Application Emojis عند الجاهزية، وهو مفعّل افتراضيًا. اضبطه على `false` فقط إذا كنت تريد تعطيل المزامنة.
 
 ## الصور
 
-لا يحتوي هذا المجلد على صور الإيموجيات الثنائية. انسخها يدويًا من بوت السيستم إلى:
+يعتمد بوت استخراج النصوص على الملفات الثنائية الموجودة في:
 
 ```text
-text_bot/assets/emojis/<theme>/
+text_bot/assets/emojis/
 ```
 
-مثال: `text_bot/assets/emojis/gold/circlecheck.png`.
+عند التشغيل يرفع هذه الملفات كـ Application Emojis لتطبيق بوت استخراج النصوص ويحدّث جدول الإيموجيات المحلي تلقائيًا، بنفس فكرة بوت السيستم في الجذر.

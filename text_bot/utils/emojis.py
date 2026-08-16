@@ -1,14 +1,14 @@
 import json
-import os
 import re
+import base64
 from pathlib import Path
 from typing import Any
 
+import requests
 import discord
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 REPO_DIR = BASE_DIR.parent
-SYSTEM_EMOJIS_JS = REPO_DIR / "utils" / "emojis.js"
 SYSTEM_EMOJIS_JSON = REPO_DIR / "utils" / "emojis.json"
 EMOJIS_JSON = BASE_DIR / "utils" / "emojis.json"
 ASSETS_DIR = BASE_DIR / "assets" / "emojis"
@@ -33,41 +33,39 @@ FALLBACKS = {
 
 class EmojiManager:
     def __init__(self):
-        self.system_map = self.load_system_emojis()
-        self.map = {"__color__": "system", **self.system_map}
+        self.map = {"__color__": "gold"}
         self.load()
 
     @property
     def theme(self):
-        return "system"
+        return self.map.get("__color__", "gold")
+
+    def _load_json(self, path):
+        if not path.exists():
+            return {}
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            return loaded if isinstance(loaded, dict) else {}
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"[EmojiManager] failed to load {path}: {exc}")
+            return {}
 
     def load_system_emojis(self):
-        values = {}
-        if SYSTEM_EMOJIS_JSON.exists():
-            try:
-                loaded = json.loads(SYSTEM_EMOJIS_JSON.read_text(encoding="utf-8"))
-                if isinstance(loaded, dict):
-                    values.update({k: v for k, v in loaded.items() if k != "__color__"})
-            except (OSError, json.JSONDecodeError) as exc:
-                print(f"[EmojiManager] failed to load root emojis json: {exc}")
-        if SYSTEM_EMOJIS_JS.exists():
-            text = SYSTEM_EMOJIS_JS.read_text(encoding="utf-8")
-            pattern = re.compile(r"(\w+):\s*\{\s*id:\s*'([0-9]{17,22})'.*?toString:\s*\(\)\s*=>\s*'(<a?:[^']+>)'", re.S)
-            for key, _emoji_id, rendered in pattern.findall(text):
-                values.setdefault(key, rendered)
-        return values
+        return {k: v for k, v in self._load_json(SYSTEM_EMOJIS_JSON).items() if k != "__color__"}
 
     def load(self):
-        # Match the root bot: placeholders are resolved from the root emoji table.
-        # Never merge text_bot/utils/emojis.json at runtime; text_bot may keep local
-        # assets, but copied text-bot emoji IDs can render as literal :b_name: text
-        # in messages and can make button icons use the wrong color set.
-        self.system_map = self.load_system_emojis()
-        self.map = {"__color__": "system", **self.system_map}
+        # Same runtime idea as the root bot: read the generated emoji table.
+        # text_bot keeps its own generated IDs because Discord application emojis
+        # belong to one bot application; copied root IDs may not render for this bot.
+        local = self._load_json(EMOJIS_JSON)
+        if local:
+            self.map = local
+        else:
+            self.map = {"__color__": "gold", **self.load_system_emojis()}
         return self.map
 
     def save(self):
-        ordered = {"__color__": "system"}
+        ordered = {"__color__": self.theme}
         for key in sorted(k for k in self.map if k != "__color__"):
             ordered[key] = self.map.get(key, "")
         EMOJIS_JSON.parent.mkdir(parents=True, exist_ok=True)
@@ -85,7 +83,6 @@ class EmojiManager:
             value = value.strip()
             if CUSTOM_RE.match(value):
                 return value
-            # Discord bots cannot render legacy :name: custom emoji text.
             if LEGACY_COLON_RE.match(value):
                 return ""
             return value
@@ -93,9 +90,7 @@ class EmojiManager:
 
     def get(self, name):
         value = self._format_custom_emoji(self.map.get(name))
-        if value:
-            return value
-        return FALLBACKS.get(name, "")
+        return value or FALLBACKS.get(name, "")
 
     def partial(self, name):
         value = self.get(name)
@@ -108,7 +103,6 @@ class EmojiManager:
 
     def replace(self, value: Any):
         if isinstance(value, str):
-            # Mirrors the root emojiReplacer hook: refresh explicit custom emojis by name.
             def refresh_custom(match):
                 emoji_name = match.group(2)
                 return self.map.get(emoji_name) or match.group(0)
@@ -129,8 +123,39 @@ class EmojiManager:
         return bool(isinstance(value, str) and (CUSTOM_RE.match(value.strip()) or value.strip()))
 
     def sync_application_emojis(self, bot_user_id: int, token: str):
-        """Keep compatibility with the old text-bot sync command; root system IDs are preferred."""
-        return {"ok": True, "uploaded": 0, "mapped": len(self.system_map), "theme": "system", "reason": "using root utils/emojis.json/js"}
+        if not token:
+            raise RuntimeError("DISCORD_TOKEN is required to sync application emojis.")
+        if not ASSETS_DIR.exists():
+            raise RuntimeError(f"Emoji assets directory not found: {ASSETS_DIR}")
+        headers = {"Authorization": f"Bot {token}", "Content-Type": "application/json"}
+        api = f"https://discord.com/api/v10/applications/{bot_user_id}/emojis"
+        current = requests.get(api, headers=headers, timeout=30)
+        current.raise_for_status()
+        items = current.json()
+        existing = {item["name"]: item for item in (items if isinstance(items, list) else items.get("items", []))}
+        theme = "gold"
+        prefix = THEMES[theme]["prefix"]
+        fresh = {"__color__": theme}
+        uploaded = 0
+        for path in sorted(ASSETS_DIR.iterdir()):
+            if path.suffix.lower() not in {".png", ".gif"}:
+                continue
+            base_name = path.stem
+            discord_name = f"{prefix}_{base_name}"
+            item = existing.get(discord_name)
+            if item is None:
+                mime = "image/gif" if path.suffix.lower() == ".gif" else "image/png"
+                payload = {"name": discord_name, "image": f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"}
+                created = requests.post(api, headers=headers, json=payload, timeout=30)
+                created.raise_for_status()
+                item = created.json()
+                existing[discord_name] = item
+                uploaded += 1
+            animated = path.suffix.lower() == ".gif" or item.get("animated")
+            fresh[base_name] = f"<{'a' if animated else ''}:{item['name']}:{item['id']}>"
+        self.map = fresh
+        self.save()
+        return {"ok": True, "uploaded": uploaded, "mapped": len(fresh) - 1, "theme": theme, "source": str(ASSETS_DIR)}
 
 emoji_manager = EmojiManager()
 
@@ -141,7 +166,6 @@ def markdown_block(title: str, body: str) -> str:
     return emojize(f"**{title}**\n\n---\n\n{body}")
 
 def themed_embed(title=None, description=None, color_name=None):
-    # Theme policy: the text bot is gold-first; only explicit errors use red.
     selected = "red" if color_name == "red" else "gold"
     color = THEMES[selected]["color"]
     embed = discord.Embed(color=color, title=emojize(title) if title else None, description=emojize(description) if description else None)

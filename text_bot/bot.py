@@ -151,7 +151,7 @@ async def send_panel(destination, title=None, description=None, *, sections=None
         kwargs["file"] = file
     if ephemeral:
         kwargs["ephemeral"] = True
-    if panel_view and view is None:
+    if panel_view and view is None and file is None:
         kwargs["view"] = panel_view
         return await destination.send(**kwargs)
     embed = themed_embed(title=title, description=description or ("\n\n".join(sections or [])), color_name="red" if error else "gold")
@@ -174,7 +174,7 @@ def status_sections(stage, detail=None, *, current=None, total=None, heartbeat=0
 
 def status_view(stage, detail=None, *, error=False, current=None, total=None, heartbeat=0):
     return components_v2_panel(
-        title="{emoji:clock} مؤشر الاستخراج",
+        title=None,
         sections=status_sections(stage, detail, current=current, total=total, heartbeat=heartbeat),
         error=error,
     )
@@ -199,7 +199,7 @@ class ExtractionStatus:
 
     def fallback_embed(self):
         return status_embed(
-            "{emoji:clock} مؤشر الاستخراج",
+            None,
             "\n".join(status_sections(self.title, self.description, current=self.current, total=self.total, heartbeat=self.heartbeat)),
             error=self.error,
         )
@@ -282,7 +282,7 @@ async def edit_status(status, title, description=None, *, error=False, current=N
     if view:
         await status.edit(content=None, embeds=[], attachments=[], view=view)
     else:
-        await status.edit(content=None, embed=status_embed("{emoji:clock} مؤشر الاستخراج", "\n".join(status_sections(title, description, current=current, total=total)), error=error), view=None)
+        await status.edit(content=None, embed=status_embed(None, "\n".join(status_sections(title, description, current=current, total=total)), error=error), view=None)
 
 def build_extraction_prompt(settings):
     spacing = "اترك سطرًا فارغًا بين كل فقاعة كلام." if settings.get("bubble_spacing", True) else "لا تترك أسطرًا فارغة بين الفقاعات؛ اجعل النص متتابعًا ومنظمًا."
@@ -920,9 +920,11 @@ async def send_mode_selection(destination, view):
 
 def upload_prompt_text():
     return (
-        f"## {emoji_manager.placeholder('folderopen')} أرسل ملفات الفصل الآن\n"
-        f"{emoji_manager.placeholder('photo')} صور مباشرة حتى `{MAX_IMAGES_PER_REQUEST}`، أو ملف ZIP، أو رابط Google Drive.\n"
-        f"{emoji_manager.placeholder('clock')} بعد الاستلام سأعرض مؤشر انتظار احترافي وأحدّثه أثناء كل مرحلة."
+        f"## {emoji_manager.placeholder('folderopen')} خطوة إرفاق صور الفصل.\n"
+        "توجد ثلاث طرق لكي ترسل صور فصلك.\n"
+        f"{emoji_manager.placeholder('photo')} **الطريقة الأولى:** إرفاق ما يصل إلى `{MAX_IMAGES_PER_REQUEST}` صور مباشرة في نفس الرسالة، مع ترتيب الصور بأسمائها قبل الإرسال.\n"
+        f"{emoji_manager.placeholder('folder')} **الطريقة الثانية:** إرسال ملف ZIP بداخله صور الفصل مرتبة بأسمائها.\n"
+        f"{emoji_manager.placeholder('folderopen')} **الطريقة الثالثة:** إرسال رابط Google Drive يحتوي على صور الفصل مرتبة بأسمائها."
     )
 
 # ============================================================
@@ -1205,9 +1207,10 @@ async def on_ready():
         print(f"تمت مزامنة {len(synced)} أمر.")
     except Exception as e:
         print(f"فشل مزامنة الأوامر: {e}")
-    if os.getenv("SYNC_APPLICATION_EMOJIS", "false").lower() == "true":
+    if os.getenv("SYNC_APPLICATION_EMOJIS", "true").lower() == "true":
         try:
             result = await asyncio.to_thread(emoji_manager.sync_application_emojis, bot.user.id, BOT_TOKEN)
+            emoji_manager.load()
             print(f"[EmojiSetup] {result}")
         except Exception as e:
             print(f"[EmojiSetup] failed: {e}")
