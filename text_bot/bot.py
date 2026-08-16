@@ -134,8 +134,7 @@ async def send_status(channel, title: str, body: str = "", *,
                       error: bool = False) -> discord.Message:
     color = COLOR_RED if error else COLOR_GOLD
     return await channel.send(
-        view=_container_view(title, body, color=color),
-        flags=CV2_FLAG,
+        view=_container_view(title, body, color=color)
     )
 
 
