@@ -15,6 +15,7 @@ EMOJIS_JSON = BASE_DIR / "utils" / "emojis.json"
 ASSETS_DIR = BASE_DIR / "assets" / "emojis"
 PLACEHOLDER_RE = re.compile(r"\{emoji:([A-Za-z0-9_]+)\}")
 CUSTOM_RE = re.compile(r"^<a?:[A-Za-z0-9_]{2,32}:\d{17,22}>$")
+CUSTOM_PARTS_RE = re.compile(r"^<a?:([A-Za-z0-9_]{2,32}):(\d{17,22})>$")
 LEGACY_COLON_RE = re.compile(r"^:[A-Za-z0-9_]{2,32}:$")
 THEMES = {
     "blue": {"prefix": "b", "color": 0x5865F2},
@@ -59,6 +60,13 @@ class EmojiManager:
         EMOJIS_JSON.write_text(json.dumps(ordered, ensure_ascii=False, indent=4) + "\n", encoding="utf-8")
         self.map = ordered
 
+    def _emoji_matches_theme(self, value):
+        match = CUSTOM_PARTS_RE.match(value)
+        if not match:
+            return False
+        expected_prefix = THEMES[self.theme]["prefix"] + "_"
+        return match.group(1).startswith(expected_prefix)
+
     def _format_custom_emoji(self, value):
         if isinstance(value, dict):
             emoji_id = str(value.get("id", "")).strip()
@@ -69,7 +77,7 @@ class EmojiManager:
         if isinstance(value, str):
             value = value.strip()
             if CUSTOM_RE.match(value):
-                return value
+                return value if self._emoji_matches_theme(value) else ""
             # Discord bots cannot render legacy :name: custom emoji text.
             if LEGACY_COLON_RE.match(value):
                 return ""

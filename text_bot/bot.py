@@ -105,34 +105,52 @@ def status_embed(title, description, *, error=False):
     return themed_embed(title=title, description=description, color_name="red" if error else "gold")
 
 def _split_visual_rules(text):
-    return [part.strip() for part in emojize(text or "").split(RULE)]
+    return [part.strip() for part in emojize(text or "").split(RULE) if part.strip()]
 
-def components_v2_panel(title, description, *, error=False):
-    """Build a Components V2 panel so RULE renders as real Separator lines."""
+def components_v2_panel(title=None, description=None, *, sections=None, error=False):
+    """Build a Components V2 panel only for messages that really need visual sections."""
     if not V2_SEPARATOR_SUPPORTED:
         return None
     container = discord.ui.Container(accent_colour=discord.Colour.red() if error else discord.Colour(THEMES["gold"]["color"]))
-    container.add_item(discord.ui.TextDisplay(f"## {emojize(title)}"))
-    for part in _split_visual_rules(description):
-        container.add_item(discord.ui.Separator(visible=True))
-        if part:
-            container.add_item(discord.ui.TextDisplay(part))
+    if title:
+        container.add_item(discord.ui.TextDisplay(emojize(title)))
+    parts = [emojize(part).strip() for part in sections] if sections is not None else _split_visual_rules(description)
+    for idx, part in enumerate([p for p in parts if p]):
+        if idx > 0:
+            container.add_item(discord.ui.Separator(visible=True))
+        container.add_item(discord.ui.TextDisplay(part))
     view = discord.ui.LayoutView(timeout=None)
     view.add_item(container)
     return view
 
-async def send_status(channel, title, description, *, error=False):
-    view = components_v2_panel(title, description, error=error)
-    if view:
-        return await channel.send(view=view)
-    return await channel.send(embed=status_embed(title, description, error=error))
+async def send_panel(destination, title=None, description=None, *, sections=None, content=None, file=None, view=None, ephemeral=False, error=False):
+    panel_view = components_v2_panel(title, description, sections=sections, error=error)
+    kwargs = {"content": emojize(content) if content else None}
+    if file is not None:
+        kwargs["file"] = file
+    if ephemeral:
+        kwargs["ephemeral"] = True
+    if panel_view and view is None:
+        kwargs["view"] = panel_view
+        return await destination.send(**kwargs)
+    embed = themed_embed(title=title, description=description or ("\n\n".join(sections or [])), color_name="red" if error else "gold")
+    kwargs.update({"embed": embed, "view": view})
+    return await destination.send(**kwargs)
 
-async def edit_status(message, title, description, *, error=False):
-    view = components_v2_panel(title, description, error=error)
-    if view:
-        await message.edit(content=None, embed=None, view=view)
-        return
-    await message.edit(embed=status_embed(title, description, error=error), content=None, view=None)
+def status_body(stage, detail=None, *, current=None, total=None):
+    progress = f"`{current}/{total}`" if current is not None and total else "`...`"
+    lines = [f"{emoji_manager.placeholder('clock')} **الحالة:** {stage}", f"{emoji_manager.placeholder('chartpie')} **التقدم:** {progress}"]
+    if detail:
+        lines.append(f"{emoji_manager.placeholder('infocircle')} {detail}")
+    return "\n".join(lines)
+
+async def send_status(channel, title, description=None, *, error=False, current=None, total=None):
+    body = status_body(emojize(title), description, current=current, total=total)
+    return await channel.send(embed=status_embed("{emoji:clock} مؤشر الاستخراج", body, error=error))
+
+async def edit_status(message, title, description=None, *, error=False, current=None, total=None):
+    body = status_body(emojize(title), description, current=current, total=total)
+    await message.edit(embed=status_embed("{emoji:clock} مؤشر الاستخراج", body, error=error), content=None, view=None)
 
 def build_extraction_prompt(settings):
     spacing = "اترك سطرًا فارغًا بين كل فقاعة كلام." if settings.get("bubble_spacing", True) else "لا تترك أسطرًا فارغة بين الفقاعات؛ اجعل النص متتابعًا ومنظمًا."
@@ -609,6 +627,21 @@ def download_image_from_url(url):
     r.raise_for_status()
     return r.content
 
+def sanitize_output_stem(value, default="zeus"):
+    value = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', " ", value or "").strip()
+    value = re.sub(r"\s+", "_", value).strip("._")
+    return (value or default)[:80]
+
+def unique_output_path(directory, stem, suffix):
+    stem = sanitize_output_stem(stem)
+    candidate = directory / f"{stem}.{suffix}"
+    counter = 2
+    while candidate.exists():
+        candidate = directory / f"{stem}_{counter}.{suffix}"
+        counter += 1
+    return candidate
+
+
 def extract_gdrive_folder_id(url):
     patterns = [
         r'/folders/([a-zA-Z0-9_-]+)',
@@ -632,6 +665,15 @@ def extract_gdrive_file_id(url):
         if match:
             return match.group(1)
     return None
+
+def get_drive_item_name(item_id):
+    if not GDRIVE_API_KEY:
+        return "zeus"
+    url = f"https://www.googleapis.com/drive/v3/files/{item_id}"
+    r = requests.get(url, params={"key": GDRIVE_API_KEY, "fields": "name"}, timeout=30)
+    if r.status_code == 200:
+        return r.json().get("name") or "zeus"
+    return "zeus"
 
 def list_drive_images(folder_id):
     url = "https://www.googleapis.com/drive/v3/files"
@@ -661,7 +703,7 @@ def download_drive_image(file_id):
             raise Exception(f"فشل تحميل الصورة من Drive: {file_id}")
     return response.content
 
-def process_drive_link(link):
+def process_drive_link(link, *, include_name=False):
     folder_id = extract_gdrive_folder_id(link)
     file_id = extract_gdrive_file_id(link)
     if folder_id:
@@ -670,13 +712,16 @@ def process_drive_link(link):
         for f in files:
             data = download_drive_image(f["id"])
             images.append((data, f["name"]))
-        return images
+        source_name = get_drive_item_name(folder_id)
+        return (images, source_name) if include_name else images
     elif file_id:
         data = download_drive_image(file_id)
         if zipfile.is_zipfile(io.BytesIO(data)):
-            return extract_images_from_zip_bytes(data)
+            images = extract_images_from_zip_bytes(data)
         else:
-            return [(data, f"image_{file_id}.jpg")]
+            images = [(data, f"image_{file_id}.jpg")]
+        source_name = get_drive_item_name(file_id)
+        return (images, Path(source_name).stem) if include_name else images
     else:
         raise Exception("رابط Drive غير صالح.")
 
@@ -693,22 +738,19 @@ def extract_images_from_zip_bytes(zip_bytes):
 # ============================================================
 # واجهة اختيار الوضع
 # ============================================================
-class ModeSelectView(discord.ui.View):
+class ModeSelectView(discord.ui.LayoutView if V2_SEPARATOR_SUPPORTED else discord.ui.View):
     def __init__(self, user_id):
         super().__init__(timeout=120)
         self.user_id = user_id
         self.thinking_enabled = None
         self.confirmed = False
-
-    @discord.ui.button(label="دقة عالية", emoji=emoji_manager.placeholder("circlecheck"), style=discord.ButtonStyle.secondary)
-    async def high_accuracy(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.user_id:
-            await interaction.response.send_message("هذا الزر ليس لك.", ephemeral=True)
-            return
-        self.thinking_enabled = True
-        self.confirmed = True
-        await interaction.response.defer()
-        self.stop()
+        if V2_SEPARATOR_SUPPORTED:
+            container = discord.ui.Container(accent_colour=discord.Colour(THEMES["gold"]["color"]))
+            for idx, section in enumerate(mode_selection_sections()):
+                if idx > 0:
+                    container.add_item(discord.ui.Separator(visible=True))
+                container.add_item(discord.ui.TextDisplay(emojize(section)))
+            self.add_item(container)
 
     @discord.ui.button(label="سرعة عالية", emoji=emoji_manager.placeholder("bolt"), style=discord.ButtonStyle.secondary)
     async def high_speed(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -719,6 +761,43 @@ class ModeSelectView(discord.ui.View):
         self.confirmed = True
         await interaction.response.defer()
         self.stop()
+
+    @discord.ui.button(label="دقة كاملة", emoji=emoji_manager.placeholder("circlecheck"), style=discord.ButtonStyle.secondary)
+    async def high_accuracy(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("هذا الزر ليس لك.", ephemeral=True)
+            return
+        self.thinking_enabled = True
+        self.confirmed = True
+        await interaction.response.defer()
+        self.stop()
+
+def mode_selection_sections():
+    return [
+        f"## {emoji_manager.placeholder('settings')} اختر وضع المعالجة",
+        (
+            f"### {emoji_manager.placeholder('bolt')} سرعة عالية — موصى به\n"
+            "يحافظ على الدقة بشكل ممتاز ويعطي نتيجة أسرع لمعظم الفصول.\n"
+            "**استخدمه افتراضيًا** إلا إذا كان الفصل صعبًا جدًا أو النص غير واضح."
+        ),
+        (
+            f"### {emoji_manager.placeholder('circlecheck')} دقة كاملة\n"
+            "يفعّل معالجة أعمق للحالات الصعبة جدًا.\n"
+            f"{emoji_manager.placeholder('alerttriangle')} **تنبيه:** قد يطول كثيرًا، وقد يصل إلى 30 دقيقة تقريبًا إذا كان عدد الصور 10."
+        ),
+    ]
+
+async def send_mode_selection(destination, view):
+    if V2_SEPARATOR_SUPPORTED:
+        return await destination.send(view=view)
+    return await destination.send(embed=themed_embed(description="\n\n".join(mode_selection_sections())), view=view)
+
+def upload_prompt_text():
+    return (
+        f"## {emoji_manager.placeholder('folderopen')} أرسل ملفات الفصل الآن\n"
+        f"{emoji_manager.placeholder('photo')} صور مباشرة حتى `{MAX_IMAGES_PER_REQUEST}`، أو ملف ZIP، أو رابط Google Drive.\n"
+        f"{emoji_manager.placeholder('clock')} بعد الاستلام سأعرض مؤشر انتظار احترافي وأحدّثه أثناء كل مرحلة."
+    )
 
 # ============================================================
 # الواجهة التفاعلية لإدارة الحسابات
@@ -1017,23 +1096,19 @@ async def extract(interaction: discord.Interaction):
         return
     if int(profile.get("points", 0)) <= 0:
         support = f"\n{emoji_manager.placeholder('ticket')} افتح تذكرة تجديد النقاط: {SUPPORT_SERVER_URL}" if SUPPORT_SERVER_URL else ""
-        await interaction.followup.send(f"{emoji_manager.placeholder('circlex')} **لا تملك نقاطًا كافية.**\n{line()}\nكل فصل يستهلك نقطة واحدة.{support}", ephemeral=True)
+        await interaction.followup.send(f"{emoji_manager.placeholder('circlex')} **لا تملك نقاطًا كافية.**\nكل فصل يستهلك نقطة واحدة.{support}", ephemeral=True)
         return
     settings = profile["settings"]
 
     view = ModeSelectView(user_id)
-    await interaction.followup.send(f"{emoji_manager.placeholder('settings')} ## اختر وضع المعالجة\n{line()}", view=view)
+    await send_mode_selection(interaction.followup, view)
     await view.wait()
     if not view.confirmed:
         await interaction.followup.send("{emoji:circlex} **تم إلغاء العملية.**", ephemeral=True)
         return
     thinking_enabled = view.thinking_enabled
 
-    await interaction.followup.send(
-        f"{emoji_manager.placeholder('folderopen')} ## أرسل ملفات الفصل الآن\n{line()}\n"
-        f"{emoji_manager.placeholder('photo')} صور مباشرة (حتى {MAX_IMAGES_PER_REQUEST})، أو ZIP، أو رابط Google Drive.\n"
-        f"{emoji_manager.placeholder('clock')} سأعرض مؤشر انتظار فور بدء التحميل والمعالجة."
-    )
+    await interaction.followup.send(upload_prompt_text())
 
     try:
         msg = await bot.wait_for(
@@ -1045,8 +1120,9 @@ async def extract(interaction: discord.Interaction):
         await interaction.followup.send("{emoji:clock} **انتهى الوقت، أعد الأمر مرة أخرى.**", ephemeral=True)
         return
 
-    status_msg = await send_status(interaction.channel, "{emoji:clock} جاري قراءة المصدر", f"لا تقلق، سأحدّث هذه الرسالة أثناء العمل.{line()}")
+    status_msg = await send_status(interaction.channel, "جاري قراءة المصدر", "استلمت المصدر، وسأحدّث هذه اللوحة أثناء التحميل والاستخراج.")
     images = []
+    source_name = "zeus_1"
     if msg.attachments:
         if len(msg.attachments) > MAX_IMAGES_PER_REQUEST:
             await edit_status(status_msg, "{emoji:circlex} خطأ", f"الحد الأقصى {MAX_IMAGES_PER_REQUEST} صور.", error=True)
@@ -1058,21 +1134,24 @@ async def extract(interaction: discord.Interaction):
             elif att.filename.lower().endswith(".zip"):
                 data = await att.read()
                 images.extend(extract_images_from_zip_bytes(data))
+                source_name = Path(att.filename).stem
             else:
                 await edit_status(status_msg, "{emoji:circlex} ملف غير مدعوم", f"الملف `{att.filename}` غير مدعوم.", error=True)
                 return
     elif msg.content.startswith("http"):
         link = msg.content.strip()
         try:
-            await edit_status(status_msg, "{emoji:clock} جاري تحميل الرابط", f"قد يستغرق Google Drive وقتًا أطول حسب حجم الفصل.{line()}")
+            await edit_status(status_msg, "جاري تحميل الرابط", "قد يستغرق Google Drive وقتًا أطول حسب حجم الفصل.")
             if "drive.google.com" in link:
-                images = await asyncio.to_thread(process_drive_link, link)
+                images, source_name = await asyncio.to_thread(process_drive_link, link, include_name=True)
             else:
                 data = await asyncio.to_thread(download_image_from_url, link)
                 if zipfile.is_zipfile(io.BytesIO(data)):
                     images = extract_images_from_zip_bytes(data)
+                    source_name = "zeus_1"
                 else:
                     images.append((data, "downloaded_image.jpg"))
+                    source_name = "zeus_1"
         except Exception as e:
             await edit_status(status_msg, "{emoji:circlex} فشل معالجة الرابط", f"`{str(e)}`", error=True)
             return
@@ -1085,7 +1164,7 @@ async def extract(interaction: discord.Interaction):
         return
 
     images.sort(key=lambda x: natural_sort_key(x[1]))
-    await edit_status(status_msg, "{emoji:clock} بدأ الاستخراج الآن", f"تم العثور على `{len(images)}` صورة.{line()}")
+    await edit_status(status_msg, "بدأ الاستخراج الآن", f"تم العثور على `{len(images)}` صورة.", current=0, total=len(images))
     combined_text = ""
     total_images = len(images)
     for idx, (img_bytes, img_name) in enumerate(images, start=1):
@@ -1100,7 +1179,7 @@ async def extract(interaction: discord.Interaction):
             )
             separator = f"\n\n{line()}\n## صورة {idx}\n{line()}\n\n"
             combined_text += separator + text
-            await edit_status(status_msg, "{emoji:clock} المعالجة مستمرة", f"تمت معالجة `{idx}` من `{total_images}` صورة.{line()}")
+            await edit_status(status_msg, "المعالجة مستمرة", f"تمت معالجة الصورة `{idx}` من `{total_images}`.", current=idx, total=total_images)
         except Exception as e:
             await edit_status(status_msg, "{emoji:circlex} خطأ أثناء المعالجة", f"الصورة `{idx}`: `{str(e)}`", error=True)
             return
@@ -1113,20 +1192,24 @@ async def extract(interaction: discord.Interaction):
     output_dir = BASE_DIR / "data"
     output_dir.mkdir(parents=True, exist_ok=True)
     output_format = settings.get("output_format", "txt")
-    filename = output_dir / f"extracted_{user_id}_{int(time.time())}.{output_format}"
+    filename = unique_output_path(output_dir, source_name, output_format)
     if output_format == "docx":
         filename.write_bytes(make_docx_bytes(combined_text).getvalue())
     else:
         filename.write_text(combined_text, encoding="utf-8")
 
     file = discord.File(str(filename))
-    embed = themed_embed(
-        title="{emoji:circlecheck} اكتمل الاستخراج",
-        description=f"## تم استخراج الفصل بنجاح\n{line()}\n**تمت معالجة `{total_images}` صورة.**\n{emoji_manager.placeholder('star')} تم خصم نقطة واحدة. المتبقي: `{profile_after.get('points', 0)}`\n{line()}\n{emoji_manager.placeholder('photo')} تم إرفاق ملف `{output_format.upper()}` بالنتيجة.",
-        color_name="green",
-    )
     await status_msg.delete()
-    await interaction.channel.send(embed=embed, file=file)
+    await send_panel(
+        interaction.channel,
+        sections=[
+            f"## {emoji_manager.placeholder('circlecheck')} تم استخراج الفصل بنجاح",
+            f"{emoji_manager.placeholder('photo')} تمت معالجة `{total_images}` صورة وإرفاق ملف `{filename.name}`.",
+            f"{emoji_manager.placeholder('star')} تم خصم نقطة واحدة. المتبقي: `{profile_after.get('points', 0)}`.",
+        ],
+        content=f"{interaction.user.mention} {emoji_manager.placeholder('circlecheck')} انتهى استخراج الفصل.",
+        file=file,
+    )
     os.remove(filename)
 
     increment_account_usage(user_id, "ocr")
@@ -1244,9 +1327,9 @@ class AdminPanelView(discord.ui.View):
             except Exception as e:
                 await interaction.followup.send(f"{{emoji:circlex}} فشل إنشاء حساب OCR: `{str(e)}`", ephemeral=True)
                 return
-            await interaction.followup.send(embed=themed_embed("{emoji:user} إدارة حسابات OCR", f"اختر حسابًا لإدارته.{line()}"), view=AccountsView(OWNER_ID), ephemeral=True)
+            await interaction.followup.send(embed=themed_embed("{emoji:user} إدارة حسابات OCR", "اختر حسابًا لإدارته."), view=AccountsView(OWNER_ID), ephemeral=True)
             return
-        await interaction.response.send_message(embed=themed_embed("{emoji:user} إدارة حسابات OCR", f"اختر حسابًا لإدارته.{line()}"), view=AccountsView(OWNER_ID), ephemeral=True)
+        await interaction.response.send_message(embed=themed_embed("{emoji:user} إدارة حسابات OCR", "اختر حسابًا لإدارته."), view=AccountsView(OWNER_ID), ephemeral=True)
 
     @discord.ui.button(label="حالة OCR", emoji=emoji_manager.placeholder("infocircle"), style=discord.ButtonStyle.secondary, row=1)
     async def ocr_status(self, interaction, button):
@@ -1254,7 +1337,7 @@ class AdminPanelView(discord.ui.View):
         now_ts = int(time.time())
         active = sum(1 for a in data["accounts"] if a.get("ocr_limit_until", 0) <= now_ts)
         total_uses = sum(a.get("ocr_count", 0) for a in data["accounts"])
-        embed = themed_embed("{emoji:chartpie} حالة OCR", f"إجمالي الحسابات: `{len(data['accounts'])}`\nنشطة: `{active}`\nالاستخدامات: `{total_uses}`{line()}")
+        embed = themed_embed("{emoji:chartpie} حالة OCR", f"إجمالي الحسابات: `{len(data['accounts'])}`\nنشطة: `{active}`\nالاستخدامات: `{total_uses}`")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 def admin_panel_embed():
@@ -1299,23 +1382,24 @@ async def prefix_extract(ctx):
         await ctx.reply("{emoji:lock} **تم منعك من استخدام البوت.**", mention_author=False)
         return
     if int(profile.get("points", 0)) <= 0:
-        await ctx.reply(f"{{emoji:circlex}} **لا تملك نقاطًا كافية.**{line()}كل فصل يستهلك نقطة واحدة.", mention_author=False)
+        await ctx.reply("{emoji:circlex} **لا تملك نقاطًا كافية.**\nكل فصل يستهلك نقطة واحدة.", mention_author=False)
         return
     settings = profile["settings"]
     view = ModeSelectView(user_id)
-    await ctx.send(embed=themed_embed("{emoji:settings} اختر وضع المعالجة", f"اضغط أحد الأزرار للمتابعة.{line()}"), view=view)
+    await send_mode_selection(ctx, view)
     await view.wait()
     if not view.confirmed:
         await ctx.send("{emoji:circlex} **تم إلغاء العملية.**")
         return
-    await ctx.send(embed=themed_embed("{emoji:folderopen} أرسل ملفات الفصل الآن", f"صور مباشرة، ZIP، أو رابط Google Drive.{line()}"))
+    await ctx.send(upload_prompt_text())
     try:
         msg = await bot.wait_for('message', check=lambda m: m.author == ctx.author and m.channel == ctx.channel, timeout=300)
     except asyncio.TimeoutError:
         await ctx.send("{emoji:clock} **انتهى الوقت، أعد الأمر مرة أخرى.**")
         return
-    status_msg = await send_status(ctx.channel, "{emoji:clock} جاري قراءة المصدر", f"لا تقلق، سأحدّث هذه الرسالة أثناء العمل.{line()}")
+    status_msg = await send_status(ctx.channel, "جاري قراءة المصدر", "استلمت المصدر، وسأحدّث هذه اللوحة أثناء التحميل والاستخراج.")
     images = []
+    source_name = "zeus_1"
     try:
         if msg.attachments:
             if len(msg.attachments) > MAX_IMAGES_PER_REQUEST:
@@ -1326,17 +1410,19 @@ async def prefix_extract(ctx):
                     images.append((await att.read(), att.filename))
                 elif att.filename.lower().endswith(".zip"):
                     images.extend(extract_images_from_zip_bytes(await att.read()))
+                    source_name = Path(att.filename).stem
                 else:
                     await edit_status(status_msg, "{emoji:circlex} ملف غير مدعوم", f"`{att.filename}`", error=True)
                     return
         elif msg.content.startswith("http"):
-            await edit_status(status_msg, "{emoji:clock} جاري تحميل الرابط", f"قد يستغرق Google Drive وقتًا أطول.{line()}")
+            await edit_status(status_msg, "جاري تحميل الرابط", "قد يستغرق Google Drive وقتًا أطول.")
             link = msg.content.strip()
             if "drive.google.com" in link:
-                images = await asyncio.to_thread(process_drive_link, link)
+                images, source_name = await asyncio.to_thread(process_drive_link, link, include_name=True)
             else:
                 data = await asyncio.to_thread(download_image_from_url, link)
                 images = extract_images_from_zip_bytes(data) if zipfile.is_zipfile(io.BytesIO(data)) else [(data, "downloaded_image.jpg")]
+                source_name = "zeus_1"
         else:
             await edit_status(status_msg, "{emoji:circlex} مصدر غير صالح", "أرسل صورًا أو ZIP أو رابطًا صالحًا.", error=True)
             return
@@ -1347,13 +1433,13 @@ async def prefix_extract(ctx):
         await edit_status(status_msg, "{emoji:circlex} لا توجد صور", "لم يتم العثور على صور صالحة.", error=True)
         return
     images.sort(key=lambda x: natural_sort_key(x[1]))
-    await edit_status(status_msg, "{emoji:clock} بدأ الاستخراج", f"تم العثور على `{len(images)}` صورة.{line()}")
+    await edit_status(status_msg, "بدأ الاستخراج", f"تم العثور على `{len(images)}` صورة.", current=0, total=len(images))
     combined_text = ""
     for idx, (img_bytes, img_name) in enumerate(images, start=1):
         try:
             text = await asyncio.to_thread(extract_text_from_single_image, user_id, img_bytes, img_name, view.thinking_enabled, settings)
             combined_text += f"\n\n{line()}## صورة {idx}{line()}\n\n{text}"
-            await edit_status(status_msg, "{emoji:clock} المعالجة مستمرة", f"تمت معالجة `{idx}` من `{len(images)}` صورة.{line()}")
+            await edit_status(status_msg, "المعالجة مستمرة", f"تمت معالجة الصورة `{idx}` من `{len(images)}`.", current=idx, total=len(images))
         except Exception as e:
             await edit_status(status_msg, "{emoji:circlex} خطأ أثناء المعالجة", f"الصورة `{idx}`: `{str(e)}`", error=True)
             return
@@ -1364,13 +1450,13 @@ async def prefix_extract(ctx):
     output_dir = BASE_DIR / "data"
     output_dir.mkdir(parents=True, exist_ok=True)
     output_format = settings.get("output_format", "txt")
-    filename = output_dir / f"extracted_{user_id}_{int(time.time())}.{output_format}"
+    filename = unique_output_path(output_dir, source_name, output_format)
     if output_format == "docx":
         filename.write_bytes(make_docx_bytes(combined_text).getvalue())
     else:
         filename.write_text(combined_text, encoding="utf-8")
     await status_msg.delete()
-    await ctx.send(embed=themed_embed("{emoji:circlecheck} اكتمل الاستخراج", f"تم خصم نقطة واحدة. المتبقي: `{profile_after.get('points', 0)}`{line()}"), file=discord.File(str(filename)))
+    await send_panel(ctx.channel, sections=[f"## {emoji_manager.placeholder('circlecheck')} تم استخراج الفصل بنجاح", f"{emoji_manager.placeholder('photo')} تم إرفاق ملف `{filename.name}`.", f"{emoji_manager.placeholder('star')} تم خصم نقطة واحدة. المتبقي: `{profile_after.get('points', 0)}`."], content=f"{ctx.author.mention} {emoji_manager.placeholder('circlecheck')} انتهى استخراج الفصل.", file=discord.File(str(filename)))
     os.remove(filename)
     increment_account_usage(user_id, "ocr")
 
