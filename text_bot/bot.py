@@ -876,6 +876,9 @@ class ModeSelectView(discord.ui.View):
         self.user_id = user_id
         self.thinking_enabled = None
         self.confirmed = False
+        if len(self.children) >= 2:
+            self.children[0].emoji = emoji_manager.partial("bolt")
+            self.children[1].emoji = emoji_manager.partial("circlecheck")
 
     @discord.ui.button(label="سرعة عالية", emoji=emoji_manager.partial("bolt"), style=discord.ButtonStyle.secondary)
     async def high_speed(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1210,10 +1213,13 @@ async def on_ready():
     if os.getenv("SYNC_APPLICATION_EMOJIS", "true").lower() == "true":
         try:
             result = await asyncio.to_thread(emoji_manager.sync_application_emojis, bot.user.id, BOT_TOKEN)
-            emoji_manager.load()
+            emoji_manager.load(bot.user.id)
             print(f"[EmojiSetup] {result}")
         except Exception as e:
+            emoji_manager.load(bot.user.id)
             print(f"[EmojiSetup] failed: {e}")
+    else:
+        emoji_manager.load(bot.user.id)
     await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="ZEUS Text | /help"))
 
 @bot.tree.command(name="extract", description="استخراج النصوص من صور المانجا")

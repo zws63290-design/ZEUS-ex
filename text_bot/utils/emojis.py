@@ -33,6 +33,7 @@ FALLBACKS = {
 
 class EmojiManager:
     def __init__(self):
+        self.application_id = None
         self.map = {"__color__": "gold"}
         self.load()
 
@@ -51,22 +52,30 @@ class EmojiManager:
             return {}
 
     def load_system_emojis(self):
-        return {k: v for k, v in self._load_json(SYSTEM_EMOJIS_JSON).items() if k != "__color__"}
+        return {k: v for k, v in self._load_json(SYSTEM_EMOJIS_JSON).items() if not k.startswith("__")}
 
-    def load(self):
-        # Same runtime idea as the root bot: read the generated emoji table.
-        # text_bot keeps its own generated IDs because Discord application emojis
-        # belong to one bot application; copied root IDs may not render for this bot.
+    def _fallback_map(self):
+        # Do not send copied root/custom emoji IDs before verifying that they belong
+        # to this bot application; Discord renders unavailable custom emojis as
+        # literal :name: text such as :b_settings:.
+        return {"__color__": "gold"}
+
+    def load(self, application_id=None):
+        if application_id is not None:
+            self.application_id = str(application_id)
         local = self._load_json(EMOJIS_JSON)
-        if local:
+        local_app_id = str(local.get("__application_id__", "")) if local else ""
+        if self.application_id and local_app_id == self.application_id:
             self.map = local
         else:
-            self.map = {"__color__": "gold", **self.load_system_emojis()}
+            self.map = self._fallback_map()
         return self.map
 
     def save(self):
         ordered = {"__color__": self.theme}
-        for key in sorted(k for k in self.map if k != "__color__"):
+        if self.application_id:
+            ordered["__application_id__"] = self.application_id
+        for key in sorted(k for k in self.map if not k.startswith("__")):
             ordered[key] = self.map.get(key, "")
         EMOJIS_JSON.parent.mkdir(parents=True, exist_ok=True)
         EMOJIS_JSON.write_text(json.dumps(ordered, ensure_ascii=False, indent=4) + "\n", encoding="utf-8")
@@ -88,9 +97,17 @@ class EmojiManager:
             return value
         return ""
 
+
+    def _fallback_name(self, name):
+        for prefix in ("b_", "r_", "g_", "p_", "y_", "pk_"):
+            if name.startswith(prefix):
+                return name[len(prefix):]
+        return name
+
     def get(self, name):
-        value = self._format_custom_emoji(self.map.get(name))
-        return value or FALLBACKS.get(name, "")
+        lookup_name = self._fallback_name(name)
+        value = self._format_custom_emoji(self.map.get(lookup_name) or self.map.get(name))
+        return value or FALLBACKS.get(lookup_name, "")
 
     def partial(self, name):
         value = self.get(name)
@@ -105,7 +122,8 @@ class EmojiManager:
         if isinstance(value, str):
             def refresh_custom(match):
                 emoji_name = match.group(2)
-                return self.map.get(emoji_name) or match.group(0)
+                fallback_name = self._fallback_name(emoji_name)
+                return self.map.get(fallback_name) or self.map.get(emoji_name) or FALLBACKS.get(fallback_name) or match.group(0)
             value = re.sub(r"<(a)?:([A-Za-z0-9_]{2,32}):(\d{17,22})>", refresh_custom, value)
             return PLACEHOLDER_RE.sub(lambda m: self.get(m.group(1)) or "", value)
         if isinstance(value, list):
@@ -133,9 +151,10 @@ class EmojiManager:
         current.raise_for_status()
         items = current.json()
         existing = {item["name"]: item for item in (items if isinstance(items, list) else items.get("items", []))}
+        self.application_id = str(bot_user_id)
         theme = "gold"
         prefix = THEMES[theme]["prefix"]
-        fresh = {"__color__": theme}
+        fresh = {"__color__": theme, "__application_id__": self.application_id}
         uploaded = 0
         for path in sorted(ASSETS_DIR.iterdir()):
             if path.suffix.lower() not in {".png", ".gif"}:
@@ -155,7 +174,7 @@ class EmojiManager:
             fresh[base_name] = f"<{'a' if animated else ''}:{item['name']}:{item['id']}>"
         self.map = fresh
         self.save()
-        return {"ok": True, "uploaded": uploaded, "mapped": len(fresh) - 1, "theme": theme, "source": str(ASSETS_DIR)}
+        return {"ok": True, "uploaded": uploaded, "mapped": len([k for k in fresh if not k.startswith("__")]), "theme": theme, "source": str(ASSETS_DIR)}
 
 emoji_manager = EmojiManager()
 
