@@ -96,7 +96,7 @@ discord.abc.Messageable.send = _patched_messageable_send
 # ============================================================
 # مساعدات Components V2
 # ============================================================
-CV2_FLAG = discord.MessageFlags.is_components_v2
+CV2_FLAG = discord.MessageFlags.components_v2
 
 def _sep(visible: bool = True) -> ui.Separator:
     return ui.Separator(visible=visible)
