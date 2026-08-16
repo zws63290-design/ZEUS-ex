@@ -1055,7 +1055,7 @@ class AccountsView(discord.ui.View):
             ),
             accent_color=COLOR_BLUE,
         ))
-        await interaction.response.send_message(view=lv, flags=CV2_FLAG, ephemeral=True)
+        await interaction.response.send_message(view=lv, ephemeral=True)
 
     async def show_account_detail(self, interaction: discord.Interaction, idx: int):
         data = self.get_data()
@@ -1077,7 +1077,7 @@ class AccountsView(discord.ui.View):
             accent_color=COLOR_PURPLE,
         ))
         detail_view = AccountDetailView(self.user_id, idx)
-        await interaction.response.send_message(view=lv, flags=CV2_FLAG, ephemeral=True)
+        await interaction.response.send_message(view=lv, ephemeral=True)
         await interaction.followup.send(view=detail_view, ephemeral=True)
 
 
@@ -1217,7 +1217,7 @@ class AdminActionModal(discord.ui.Modal):
             msg = "تم فك المنع."
 
         lv = _container_view(f"{e('circlecheck')} {msg}", color=COLOR_GREEN)
-        await interaction.response.send_message(view=lv, flags=CV2_FLAG, ephemeral=True)
+        await interaction.response.send_message(view=lv, ephemeral=True)
 
 
 class AdminPanelView(discord.ui.View):
@@ -1249,7 +1249,7 @@ class AdminPanelView(discord.ui.View):
             _txt(body),
             accent_color=COLOR_BLUE,
         ))
-        await interaction.response.send_message(view=lv, flags=CV2_FLAG, ephemeral=True)
+        await interaction.response.send_message(view=lv, ephemeral=True)
 
     @discord.ui.button(label="➕ إضافة نقاط", style=discord.ButtonStyle.success)
     async def add(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1278,7 +1278,7 @@ class AdminPanelView(discord.ui.View):
                 lv = _container_view(
                     f"{e('circlex')} فشل إنشاء حساب OCR", f"`{ex}`", color=COLOR_RED
                 )
-                await interaction.followup.send(view=lv, flags=CV2_FLAG, ephemeral=True)
+                await interaction.followup.send(view=lv, ephemeral=True)
                 return
         lv = ui.LayoutView()
         lv.add_item(ui.Container(
@@ -1287,7 +1287,7 @@ class AdminPanelView(discord.ui.View):
             _txt("اختر حسابًا لإدارته."),
             accent_color=COLOR_PURPLE,
         ))
-        await interaction.response.send_message(view=lv, flags=CV2_FLAG, ephemeral=True)
+        await interaction.response.send_message(view=lv, ephemeral=True)
         await interaction.followup.send(view=AccountsView(OWNER_ID), ephemeral=True)
 
     @discord.ui.button(label="📊 حالة OCR", style=discord.ButtonStyle.secondary, row=1)
@@ -1307,7 +1307,7 @@ class AdminPanelView(discord.ui.View):
             ),
             accent_color=COLOR_BLUE,
         ))
-        await interaction.response.send_message(view=lv, flags=CV2_FLAG, ephemeral=True)
+        await interaction.response.send_message(view=lv, ephemeral=True)
 
 
 def parse_user_id(value: str) -> str:
@@ -1353,7 +1353,7 @@ async def extract(interaction: discord.Interaction):
         lv = _container_view(
             f"{e('lock')} تم منعك من استخدام البوت.", color=COLOR_RED
         )
-        await interaction.followup.send(view=lv, flags=CV2_FLAG, ephemeral=True)
+        await interaction.followup.send(view=lv, ephemeral=True)
         return
 
     if int(profile.get("points", 0)) <= 0:
@@ -1363,7 +1363,7 @@ async def extract(interaction: discord.Interaction):
             f"كل فصل يستهلك **نقطة واحدة**.{support}",
             color=COLOR_RED,
         )
-        await interaction.followup.send(view=lv, flags=CV2_FLAG, ephemeral=True)
+        await interaction.followup.send(view=lv, ephemeral=True)
         return
 
     settings = profile["settings"]
@@ -1380,13 +1380,13 @@ async def extract(interaction: discord.Interaction):
         accent_color=COLOR_GOLD,
     ))
     mode_btns = ModeSelectView(user_id)
-    await interaction.followup.send(view=mode_lv, flags=CV2_FLAG)
+    await interaction.followup.send(view=mode_lv)
     await interaction.followup.send(view=mode_btns)
     await mode_btns.wait()
 
     if not mode_btns.confirmed:
         lv = _container_view(f"{e('circlex')} تم إلغاء العملية.", color=COLOR_RED)
-        await interaction.followup.send(view=lv, flags=CV2_FLAG, ephemeral=True)
+        await interaction.followup.send(view=lv, ephemeral=True)
         return
 
     thinking_enabled = mode_btns.thinking_enabled
@@ -1405,7 +1405,7 @@ async def extract(interaction: discord.Interaction):
         _txt(f"{e('clock')} سأحدّث حالة المعالجة أولاً بأول."),
         accent_color=COLOR_GOLD,
     ))
-    await interaction.followup.send(view=lv, flags=CV2_FLAG)
+    await interaction.followup.send(view=lv)
 
     try:
         msg = await bot.wait_for(
@@ -1417,7 +1417,7 @@ async def extract(interaction: discord.Interaction):
         lv = _container_view(
             f"{e('clock')} انتهى الوقت.", "أعد الأمر مرة أخرى.", color=COLOR_RED
         )
-        await interaction.followup.send(view=lv, flags=CV2_FLAG, ephemeral=True)
+        await interaction.followup.send(view=lv, ephemeral=True)
         return
 
     status_msg = await send_status(
@@ -1541,7 +1541,7 @@ async def extract(interaction: discord.Interaction):
     ))
 
     await status_msg.delete()
-    await interaction.channel.send(view=lv, file=discord.File(str(filename)), flags=CV2_FLAG)
+    await interaction.channel.send(view=lv, file=discord.File(str(filename)))
     os.remove(filename)
     increment_account_usage(user_id, "ocr")
 
@@ -1569,14 +1569,14 @@ async def help_command(interaction: discord.Interaction):
         _txt(f"{e('infocircle')} الإصدار `v{BOT_VERSION}` › ZEUS Text"),
         accent_color=COLOR_GOLD,
     ))
-    await interaction.response.send_message(view=lv, flags=CV2_FLAG)
+    await interaction.response.send_message(view=lv)
 
 
 @bot.tree.command(name="setting", description="لوحة إعدادات استخراج النصوص")
 async def setting(interaction: discord.Interaction):
     view = SettingsView(interaction.user)
     await interaction.response.send_message(
-        view=view.layout_view(), flags=CV2_FLAG, ephemeral=True
+        view=view.layout_view(), ephemeral=True
     )
     await interaction.followup.send(view=view, ephemeral=True)
 
@@ -1585,7 +1585,7 @@ async def setting(interaction: discord.Interaction):
 async def profile_cmd(interaction: discord.Interaction):
     profile_data = get_user_profile(interaction.user)
     lv           = build_profile_view(interaction.user, profile_data)
-    await interaction.response.send_message(view=lv, flags=CV2_FLAG, ephemeral=True)
+    await interaction.response.send_message(view=lv, ephemeral=True)
 
 
 @bot.tree.command(name="zx", description="...")
@@ -1594,7 +1594,7 @@ async def zx(interaction: discord.Interaction):
         await interaction.response.send_message("غير مصرح.", ephemeral=True)
         return
     lv, btn_view = build_admin_panel_view()
-    await interaction.response.send_message(view=lv, flags=CV2_FLAG, ephemeral=True)
+    await interaction.response.send_message(view=lv, ephemeral=True)
     await interaction.followup.send(view=btn_view, ephemeral=True)
 
 # ============================================================
@@ -1617,20 +1617,20 @@ async def prefix_help(ctx):
         ),
         accent_color=COLOR_GOLD,
     ))
-    await ctx.send(view=lv, flags=CV2_FLAG)
+    await ctx.send(view=lv)
 
 
 @bot.command(name="profile", aliases=["بروفايل"])
 async def prefix_profile(ctx):
     profile_data = get_user_profile(ctx.author)
     lv           = build_profile_view(ctx.author, profile_data)
-    await ctx.send(view=lv, flags=CV2_FLAG)
+    await ctx.send(view=lv)
 
 
 @bot.command(name="setting", aliases=["settings", "اعدادات"])
 async def prefix_setting(ctx):
     view = SettingsView(ctx.author)
-    await ctx.send(view=view.layout_view(), flags=CV2_FLAG)
+    await ctx.send(view=view.layout_view())
     await ctx.send(view=view)
 
 
@@ -1641,7 +1641,7 @@ async def prefix_extract(ctx):
 
     if profile.get("is_blocked"):
         lv = _container_view(f"{e('lock')} أنت ممنوع من استخدام البوت.", color=COLOR_RED)
-        await ctx.reply(view=lv, flags=CV2_FLAG, mention_author=False)
+        await ctx.reply(view=lv, mention_author=False)
         return
 
     if int(profile.get("points", 0)) <= 0:
@@ -1651,7 +1651,7 @@ async def prefix_extract(ctx):
             f"كل فصل يستهلك نقطة واحدة.{support}",
             color=COLOR_RED,
         )
-        await ctx.reply(view=lv, flags=CV2_FLAG, mention_author=False)
+        await ctx.reply(view=lv, mention_author=False)
         return
 
     settings  = profile["settings"]
@@ -1666,13 +1666,13 @@ async def prefix_extract(ctx):
         accent_color=COLOR_GOLD,
     ))
     mode_btns = ModeSelectView(user_id)
-    await ctx.send(view=mode_lv, flags=CV2_FLAG)
+    await ctx.send(view=mode_lv)
     await ctx.send(view=mode_btns)
     await mode_btns.wait()
 
     if not mode_btns.confirmed:
         lv = _container_view(f"{e('circlex')} تم إلغاء العملية.", color=COLOR_RED)
-        await ctx.send(view=lv, flags=CV2_FLAG)
+        await ctx.send(view=lv)
         return
 
     lv = ui.LayoutView()
@@ -1684,7 +1684,7 @@ async def prefix_extract(ctx):
         ),
         accent_color=COLOR_GOLD,
     ))
-    await ctx.send(view=lv, flags=CV2_FLAG)
+    await ctx.send(view=lv)
 
     try:
         msg = await bot.wait_for(
@@ -1694,7 +1694,7 @@ async def prefix_extract(ctx):
         )
     except asyncio.TimeoutError:
         lv = _container_view(f"{e('clock')} انتهى الوقت.", "أعد الأمر مرة أخرى.", color=COLOR_RED)
-        await ctx.send(view=lv, flags=CV2_FLAG)
+        await ctx.send(view=lv)
         return
 
     status_msg = await send_status(
@@ -1814,7 +1814,7 @@ async def prefix_extract(ctx):
     ))
 
     await status_msg.delete()
-    await ctx.send(view=lv, file=discord.File(str(filename)), flags=CV2_FLAG)
+    await ctx.send(view=lv, file=discord.File(str(filename)))
     os.remove(filename)
     increment_account_usage(user_id, "ocr")
 
@@ -1825,7 +1825,7 @@ async def prefix_admin_panel(ctx):
         await ctx.reply("غير مصرح.", mention_author=False)
         return
     lv, btn_view = build_admin_panel_view()
-    await ctx.send(view=lv, flags=CV2_FLAG)
+    await ctx.send(view=lv)
     await ctx.send(view=btn_view)
 
 
@@ -1841,7 +1841,7 @@ async def prefix_add_points(ctx, target: str, amount: int):
         f"الرصيد الجديد: `{profile_data.get('points', 0)}`",
         color=COLOR_GREEN,
     )
-    await ctx.send(view=lv, flags=CV2_FLAG)
+    await ctx.send(view=lv)
 
 
 @bot.command(name="صفر", aliases=["setpoints"])
@@ -1855,7 +1855,7 @@ async def prefix_set_points(ctx, target: str, amount: int = 0):
         f"{e('circlecheck')} تم ضبط الرصيد إلى `{profile_data.get('points', 0)}`",
         color=COLOR_GREEN,
     )
-    await ctx.send(view=lv, flags=CV2_FLAG)
+    await ctx.send(view=lv)
 
 
 @bot.command(name="منع", aliases=["blockuser"])
@@ -1865,7 +1865,7 @@ async def prefix_block(ctx, target: str):
         return
     admin_adjust_user(parse_user_id(target), blocked=True)
     lv = _container_view(f"{e('lock')} تم منع المستخدم.", color=COLOR_RED)
-    await ctx.send(view=lv, flags=CV2_FLAG)
+    await ctx.send(view=lv)
 
 
 @bot.command(name="فك", aliases=["unblockuser"])
@@ -1875,7 +1875,7 @@ async def prefix_unblock(ctx, target: str):
         return
     admin_adjust_user(parse_user_id(target), blocked=False)
     lv = _container_view(f"{e('circlecheck')} تم فك المنع.", color=COLOR_GREEN)
-    await ctx.send(view=lv, flags=CV2_FLAG)
+    await ctx.send(view=lv)
 
 # ============================================================
 # معالجة الأخطاء
@@ -1889,15 +1889,15 @@ async def on_app_command_error(interaction: discord.Interaction,
             f"{e('clock')} الأمر قيد التهدئة.",
             f"حاول بعد `{error.retry_after:.1f}` ثانية.",
         )
-        await interaction.response.send_message(view=lv, flags=CV2_FLAG, ephemeral=True)
+        await interaction.response.send_message(view=lv, ephemeral=True)
     else:
         lv = _container_view(
             f"{e('alerttriangle')} خطأ غير متوقع", f"`{error}`", color=COLOR_RED
         )
         if interaction.response.is_done():
-            await interaction.followup.send(view=lv, flags=CV2_FLAG, ephemeral=True)
+            await interaction.followup.send(view=lv, ephemeral=True)
         else:
-            await interaction.response.send_message(view=lv, flags=CV2_FLAG, ephemeral=True)
+            await interaction.response.send_message(view=lv, ephemeral=True)
 
 # ============================================================
 # تشغيل البوت
