@@ -738,21 +738,14 @@ def extract_images_from_zip_bytes(zip_bytes):
 # ============================================================
 # واجهة اختيار الوضع
 # ============================================================
-class ModeSelectView(discord.ui.LayoutView if V2_SEPARATOR_SUPPORTED else discord.ui.View):
+class ModeSelectView(discord.ui.View):
     def __init__(self, user_id):
         super().__init__(timeout=120)
         self.user_id = user_id
         self.thinking_enabled = None
         self.confirmed = False
-        if V2_SEPARATOR_SUPPORTED:
-            container = discord.ui.Container(accent_colour=discord.Colour(THEMES["gold"]["color"]))
-            for idx, section in enumerate(mode_selection_sections()):
-                if idx > 0:
-                    container.add_item(discord.ui.Separator(visible=True))
-                container.add_item(discord.ui.TextDisplay(emojize(section)))
-            self.add_item(container)
 
-    @discord.ui.button(label="سرعة عالية", emoji=emoji_manager.placeholder("bolt"), style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="سرعة عالية", emoji=emoji_manager.partial("bolt"), style=discord.ButtonStyle.secondary)
     async def high_speed(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("هذا الزر ليس لك.", ephemeral=True)
@@ -762,7 +755,7 @@ class ModeSelectView(discord.ui.LayoutView if V2_SEPARATOR_SUPPORTED else discor
         await interaction.response.defer()
         self.stop()
 
-    @discord.ui.button(label="دقة كاملة", emoji=emoji_manager.placeholder("circlecheck"), style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="دقة كاملة", emoji=emoji_manager.partial("circlecheck"), style=discord.ButtonStyle.secondary)
     async def high_accuracy(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("هذا الزر ليس لك.", ephemeral=True)
@@ -789,7 +782,8 @@ def mode_selection_sections():
 
 async def send_mode_selection(destination, view):
     if V2_SEPARATOR_SUPPORTED:
-        return await destination.send(view=view)
+        await send_panel(destination, sections=mode_selection_sections())
+        return await destination.send(content=emojize("{emoji:settings} **اختر الوضع من الأزرار بالأسفل:**"), view=view)
     return await destination.send(embed=themed_embed(description="\n\n".join(mode_selection_sections())), view=view)
 
 def upload_prompt_text():
@@ -844,11 +838,11 @@ class AccountsView(discord.ui.View):
             next_btn.callback = self.next_page
             self.add_item(next_btn)
 
-        create_btn = discord.ui.Button(label="إنشاء حساب", emoji=emoji_manager.placeholder("circlecheck"), style=discord.ButtonStyle.secondary, custom_id="create", row=1)
+        create_btn = discord.ui.Button(label="إنشاء حساب", emoji=emoji_manager.partial("circlecheck"), style=discord.ButtonStyle.secondary, custom_id="create", row=1)
         create_btn.callback = self.create_account
         self.add_item(create_btn)
 
-        status_btn = discord.ui.Button(label="الحالة", emoji=emoji_manager.placeholder("chartpie"), style=discord.ButtonStyle.secondary, custom_id="status", row=1)
+        status_btn = discord.ui.Button(label="الحالة", emoji=emoji_manager.partial("chartpie"), style=discord.ButtonStyle.secondary, custom_id="status", row=1)
         status_btn.callback = self.show_status
         self.add_item(status_btn)
 
@@ -922,7 +916,7 @@ class AccountDetailView(discord.ui.View):
         self.user_id = user_id
         self.acc_idx = acc_idx
 
-    @discord.ui.button(label="تعيين كخدمة نشطة", emoji=emoji_manager.placeholder("bookmark"), style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="تعيين كخدمة نشطة", emoji=emoji_manager.partial("bookmark"), style=discord.ButtonStyle.secondary)
     async def set_active(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("هذه القائمة ليست لك.", ephemeral=True)
@@ -936,7 +930,7 @@ class AccountDetailView(discord.ui.View):
         else:
             await interaction.response.send_message("الحساب غير موجود.", ephemeral=True)
 
-    @discord.ui.button(label="تجديد التوكن", emoji=emoji_manager.placeholder("clock"), style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="تجديد التوكن", emoji=emoji_manager.partial("clock"), style=discord.ButtonStyle.secondary)
     async def refresh_token(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("هذه القائمة ليست لك.", ephemeral=True)
@@ -954,7 +948,7 @@ class AccountDetailView(discord.ui.View):
         else:
             await interaction.response.send_message("الحساب غير موجود.", ephemeral=True)
 
-    @discord.ui.button(label="فك الحظر", emoji=emoji_manager.placeholder("tv_unlock"), style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="فك الحظر", emoji=emoji_manager.partial("tv_unlock"), style=discord.ButtonStyle.secondary)
     async def unban(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("هذه القائمة ليست لك.", ephemeral=True)
@@ -967,7 +961,7 @@ class AccountDetailView(discord.ui.View):
         else:
             await interaction.response.send_message("الحساب غير موجود.", ephemeral=True)
 
-    @discord.ui.button(label="حذف الحساب", emoji=emoji_manager.placeholder("trash"), style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="حذف الحساب", emoji=emoji_manager.partial("trash"), style=discord.ButtonStyle.secondary)
     async def delete_account(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             await interaction.response.send_message("هذه القائمة ليست لك.", ephemeral=True)
@@ -997,13 +991,13 @@ class SettingsView(discord.ui.View):
         self.clear_items()
         settings = self.profile["settings"]
         fmt = settings.get("output_format", "txt")
-        self.add_item(discord.ui.Button(label=f"صيغة الملف: {fmt.upper()}", emoji=emoji_manager.placeholder("folder"), style=discord.ButtonStyle.secondary, custom_id="fmt", row=0))
+        self.add_item(discord.ui.Button(label=f"صيغة الملف: {fmt.upper()}", emoji=emoji_manager.partial("folder"), style=discord.ButtonStyle.secondary, custom_id="fmt", row=0))
         self.children[-1].callback = self.toggle_format
         spacing = settings.get("bubble_spacing", True)
-        self.add_item(discord.ui.Button(label=f"مسافات الفقاعات: {fmt_bool(spacing)}", emoji=emoji_manager.placeholder("list"), style=discord.ButtonStyle.secondary, custom_id="spacing", row=1))
+        self.add_item(discord.ui.Button(label=f"مسافات الفقاعات: {fmt_bool(spacing)}", emoji=emoji_manager.partial("list"), style=discord.ButtonStyle.secondary, custom_id="spacing", row=1))
         self.children[-1].callback = self.toggle_spacing
         sfx = settings.get("include_sfx", True)
-        self.add_item(discord.ui.Button(label=f"المؤثرات الصوتية: {fmt_bool(sfx)}", emoji=emoji_manager.placeholder("music_play"), style=discord.ButtonStyle.secondary, custom_id="sfx", row=1))
+        self.add_item(discord.ui.Button(label=f"المؤثرات الصوتية: {fmt_bool(sfx)}", emoji=emoji_manager.partial("music_play"), style=discord.ButtonStyle.secondary, custom_id="sfx", row=1))
         self.children[-1].callback = self.toggle_sfx
 
     async def _guard(self, interaction):
@@ -1051,21 +1045,22 @@ class SettingsView(discord.ui.View):
 
 def profile_embed(user, profile):
     settings = profile["settings"]
-    support = f"\n{line()}\n{emoji_manager.placeholder('ticket')} **تجديد النقاط:** {SUPPORT_SERVER_URL}" if SUPPORT_SERVER_URL else ""
-    return themed_embed(
+    embed = themed_embed(
         title="{emoji:user} بروفايل المستخدم",
         description=(
-            f"# {user.display_name}\n{line()}\n"
+            f"# <@{user.id}>\n{line()}\n"
             f"{emoji_manager.placeholder('star')} **النقاط المتاحة:** `{profile.get('points', 0)}`\n{line()}\n"
             f"{emoji_manager.placeholder('chartpie')} **إجمالي الاستخراجات:** `{profile.get('total_extractions', 0)}`\n{line()}\n"
             f"{emoji_manager.placeholder('shield')} **الحالة:** `{'محظور' if profile.get('is_blocked') else 'نشط'}`\n{line()}\n"
             f"{emoji_manager.placeholder('settings')} **الإخراج:** `{settings.get('output_format', 'txt').upper()}` | "
             f"**المسافات:** `{fmt_bool(settings.get('bubble_spacing', True))}` | "
             f"**المؤثرات:** `{fmt_bool(settings.get('include_sfx', True))}`"
-            f"{support}"
         ),
         color_name="purple",
     )
+    embed.set_thumbnail(url=user.display_avatar.url)
+    return embed
+
 
 # ============================================================
 # الأوامر
@@ -1216,34 +1211,31 @@ async def extract(interaction: discord.Interaction):
 
 @bot.tree.command(name="help", description="تعليمات استخدام البوت")
 async def help_command(interaction: discord.Interaction):
-    embed = themed_embed(
-        title="{emoji:photo} ZEUS Text Bot",
-        description=(
-            f"# مركز المساعدة\n{line()}\n"
-            "بوت احترافي لاستخراج نصوص المانجا والمانهوا مع نظام نقاط وإعدادات إخراج شخصية."
-        ),
-        color_name="purple",
-    )
-    commands_info = [
-        ("{emoji:playerplay} /extract", "يبدأ استخراج فصل كامل. كل عملية ناجحة تخصم **نقطة واحدة**."),
-        ("{emoji:settings} /setting", "لوحة تفاعلية لتغيير TXT/DOCX، مسافات الفقاعات، والمؤثرات الصوتية."),
-        ("{emoji:user} /profile", "يعرض نقاطك، حالتك، وعدد الاستخراجات بتنسيق واضح."),
-        ("{emoji:ticket} تجديد النقاط", "كل مستخدم يبدأ بـ **5 نقاط مجانية**. عند نفادها افتح تذكرة في السيرفر."),
+    sections = [
+        f"# {emoji_manager.placeholder('photo')} ZEUS Text Bot",
+        "بوت احترافي لاستخراج نصوص المانجا والمانهوا مع نظام نقاط وإعدادات إخراج شخصية.",
+        f"{emoji_manager.placeholder('playerplay')} **/extract**\nيبدأ استخراج فصل كامل. كل عملية ناجحة تخصم **نقطة واحدة**.",
+        f"{emoji_manager.placeholder('settings')} **/setting**\nلوحة تفاعلية لتغيير TXT/DOCX، مسافات الفقاعات، والمؤثرات الصوتية.",
+        f"{emoji_manager.placeholder('user')} **/profile**\nيعرض بروفايلك أو بروفايل شخص آخر بشكل عام مع صورة المستخدم.",
+        f"{emoji_manager.placeholder('ticket')} **تجديد النقاط**\nكل مستخدم يبدأ بـ **5 نقاط مجانية**. عند نفادها افتح تذكرة في السيرفر.",
     ]
-    for name, value in commands_info:
-        embed.add_field(name=emojize(name), value=f"{value}\n{line()}", inline=False)
-    embed.set_footer(text="ZEUS Text • Markdown + Application Emojis")
-    await interaction.response.send_message(embed=embed)
+    view = components_v2_panel(sections=sections)
+    if view:
+        await interaction.response.send_message(view=view)
+    else:
+        await interaction.response.send_message(embed=themed_embed(description="\n\n".join(sections)))
 
 @bot.tree.command(name="setting", description="لوحة إعدادات استخراج النصوص")
 async def setting(interaction: discord.Interaction):
     view = SettingsView(interaction.user)
     await interaction.response.send_message(embed=view.embed(), view=view, ephemeral=True)
 
-@bot.tree.command(name="profile", description="عرض ملفك ونقاطك في بوت استخراج النصوص")
-async def profile(interaction: discord.Interaction):
-    profile_data = get_user_profile(interaction.user)
-    await interaction.response.send_message(embed=profile_embed(interaction.user, profile_data), ephemeral=True)
+@bot.tree.command(name="profile", description="عرض ملفك أو بروفايل شخص آخر في بوت استخراج النصوص")
+@app_commands.describe(user="المستخدم المراد عرض بروفايله")
+async def profile(interaction: discord.Interaction, user: Optional[discord.User] = None):
+    target = user or interaction.user
+    profile_data = get_user_profile(target)
+    await interaction.response.send_message(embed=profile_embed(target, profile_data))
 
 def parse_user_id(value):
     match = re.search(r"(\d{15,22})", str(value))
@@ -1295,29 +1287,29 @@ class AdminPanelView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="المستخدمون", emoji=emoji_manager.placeholder("chartpie"), style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="المستخدمون", emoji=emoji_manager.partial("chartpie"), style=discord.ButtonStyle.secondary)
     async def users(self, interaction, button):
         users = list_user_profiles(25)
         body = "\n".join(f"`{u.get('user_id')}` • **{u.get('display_name', u.get('username', 'Unknown'))}** • `{u.get('points', 0)}` نقطة • {'محظور' if u.get('is_blocked') else 'نشط'}" for u in users) or "لا يوجد مستخدمون بعد."
         await interaction.response.send_message(embed=themed_embed("{emoji:chartpie} آخر المستخدمين", f"{line()}{body}"), ephemeral=True)
 
-    @discord.ui.button(label="إضافة نقاط", emoji=emoji_manager.placeholder("star"), style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="إضافة نقاط", emoji=emoji_manager.partial("star"), style=discord.ButtonStyle.secondary)
     async def add(self, interaction, button):
         await interaction.response.send_modal(AdminActionModal("add"))
 
-    @discord.ui.button(label="ضبط النقاط", emoji=emoji_manager.placeholder("adjustments"), style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="ضبط النقاط", emoji=emoji_manager.partial("adjustments"), style=discord.ButtonStyle.secondary)
     async def reset(self, interaction, button):
         await interaction.response.send_modal(AdminActionModal("reset"))
 
-    @discord.ui.button(label="منع", emoji=emoji_manager.placeholder("lock"), style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="منع", emoji=emoji_manager.partial("lock"), style=discord.ButtonStyle.secondary)
     async def block(self, interaction, button):
         await interaction.response.send_modal(AdminActionModal("block"))
 
-    @discord.ui.button(label="فك المنع", emoji=emoji_manager.placeholder("shieldcheck"), style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="فك المنع", emoji=emoji_manager.partial("shieldcheck"), style=discord.ButtonStyle.secondary)
     async def unblock(self, interaction, button):
         await interaction.response.send_modal(AdminActionModal("unblock"))
 
-    @discord.ui.button(label="حسابات OCR", emoji=emoji_manager.placeholder("user"), style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="حسابات OCR", emoji=emoji_manager.partial("user"), style=discord.ButtonStyle.secondary, row=1)
     async def ocr_accounts(self, interaction, button):
         data = load_accounts_data(OWNER_ID)
         if not data["accounts"]:
@@ -1331,7 +1323,7 @@ class AdminPanelView(discord.ui.View):
             return
         await interaction.response.send_message(embed=themed_embed("{emoji:user} إدارة حسابات OCR", "اختر حسابًا لإدارته."), view=AccountsView(OWNER_ID), ephemeral=True)
 
-    @discord.ui.button(label="حالة OCR", emoji=emoji_manager.placeholder("infocircle"), style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="حالة OCR", emoji=emoji_manager.partial("infocircle"), style=discord.ButtonStyle.secondary, row=1)
     async def ocr_status(self, interaction, button):
         data = load_accounts_data(OWNER_ID)
         now_ts = int(time.time())
@@ -1351,23 +1343,32 @@ async def zx(interaction: discord.Interaction):
     if interaction.user.id != OWNER_ID:
         await interaction.response.send_message("ليست مصرح لاستخدام الأمر.", ephemeral=True)
         return
-    await interaction.response.send_message(embed=admin_panel_embed(), view=AdminPanelView(), ephemeral=True)
+    await interaction.response.send_message(embed=admin_panel_embed(), view=AdminPanelView())
 
 # ============================================================
 # أوامر Prefix بعلامة !
 # ============================================================
 @bot.command(name="help", aliases=["مساعدة", "اوامر"])
 async def prefix_help(ctx):
-    embed = themed_embed(
-        title="{emoji:photo} ZEUS Text Bot",
-        description=f"# مركز المساعدة{line()}استخدم `/extract` أو `!extract` للبدء، و`!اعدادات` للإعدادات، و`!بروفايل` للبروفايل."
-    )
-    await ctx.send(embed=embed)
+    sections = [
+        f"# {emoji_manager.placeholder('photo')} ZEUS Text Bot",
+        "استخدم `/extract` أو `!extract` للبدء، و`!اعدادات` للإعدادات، و`!بروفايل` للبروفايل.",
+    ]
+    await send_panel(ctx.channel, sections=sections)
 
 @bot.command(name="profile", aliases=["بروفايل"])
-async def prefix_profile(ctx):
-    profile_data = get_user_profile(ctx.author)
-    await ctx.send(embed=profile_embed(ctx.author, profile_data))
+async def prefix_profile(ctx, target: Optional[str] = None):
+    user = ctx.author
+    if target:
+        try:
+            user_id = int(parse_user_id(target))
+            user = ctx.guild.get_member(user_id) if ctx.guild else None
+            user = user or await bot.fetch_user(user_id)
+        except Exception:
+            await ctx.reply("{emoji:circlex} لم أجد المستخدم المطلوب.", mention_author=False)
+            return
+    profile_data = get_user_profile(user)
+    await ctx.send(embed=profile_embed(user, profile_data))
 
 @bot.command(name="setting", aliases=["settings", "اعدادات"])
 async def prefix_setting(ctx):
