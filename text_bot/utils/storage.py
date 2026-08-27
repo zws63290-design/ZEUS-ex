@@ -1,4 +1,3 @@
-
 import os
 import time
 from copy import deepcopy
@@ -111,14 +110,26 @@ def get_user_profile(user):
     if doc is None:
         _get_db().user_profiles.update_one({"user_id": str(user.id)}, {"$set": profile}, upsert=True)
     else:
-        _get_db().user_profiles.update_one({"user_id": str(user.id)}, {"$set": {"username": profile["username"], "display_name": profile["display_name"], "updated_at": profile["updated_at"]}}, upsert=True)
+        _get_db().user_profiles.update_one(
+            {"user_id": str(user.id)},
+            {"$set": {
+                "username": profile["username"],
+                "display_name": profile["display_name"],
+                "updated_at": profile["updated_at"],
+            }},
+            upsert=True,
+        )
     return profile
 
 
 def update_user_settings(user, **settings):
     profile = get_user_profile(user)
     profile["settings"].update(settings)
-    _get_db().user_profiles.update_one({"user_id": str(user.id)}, {"$set": {"settings": profile["settings"], "updated_at": int(time.time())}}, upsert=True)
+    _get_db().user_profiles.update_one(
+        {"user_id": str(user.id)},
+        {"$set": {"settings": profile["settings"], "updated_at": int(time.time())}},
+        upsert=True,
+    )
     return profile
 
 
@@ -155,6 +166,9 @@ def list_user_profiles(limit=25):
     return list(_get_db().user_profiles.find({}, {"_id": 0}).sort("updated_at", -1).limit(int(limit)))
 
 
+# ============================================================
+# دوال نقاط السيرفر
+# ============================================================
 def get_guild_profile(guild_id):
     db = _get_db()
     doc = db.guild_profiles.find_one({"guild_id": str(guild_id)}, {"_id": 0})
@@ -162,11 +176,21 @@ def get_guild_profile(guild_id):
     if doc is None:
         db.guild_profiles.update_one({"guild_id": str(guild_id)}, {"$set": profile}, upsert=True)
     else:
-        db.guild_profiles.update_one({"guild_id": str(guild_id)}, {"$set": {"updated_at": profile["updated_at"]}}, upsert=True)
+        db.guild_profiles.update_one(
+            {"guild_id": str(guild_id)},
+            {"$set": {"updated_at": profile["updated_at"]}},
+            upsert=True,
+        )
     return profile
 
 
-def consume_guild_point(guild_id):
+def server_has_points(guild_id):
+    """يتحقق إذا كان السيرفر مفعّلًا لنقاط السيرفر ولديه نقاط > 0"""
+    profile = get_guild_profile(guild_id)
+    return bool(profile.get("guild_points_enabled", False)) and int(profile.get("points", 0)) > 0
+
+
+def consume_server_point(guild_id):
     db = _get_db()
     doc = db.guild_profiles.find_one({"guild_id": str(guild_id)}, {"_id": 0}) or {}
     profile = _normalize_guild_profile(doc, guild_id)
@@ -183,7 +207,7 @@ def consume_guild_point(guild_id):
     return bool(updated), _normalize_guild_profile(updated or profile, guild_id)
 
 
-def admin_adjust_guild(guild_id, *, points_delta=0, set_points=None, guild_points_enabled=None):
+def admin_adjust_server(guild_id, *, points_delta=0, set_points=None, guild_points_enabled=None):
     update = {"$set": {"updated_at": int(time.time())}, "$setOnInsert": {"created_at": int(time.time())}}
     if set_points is not None:
         update["$set"]["points"] = max(0, int(set_points))
@@ -192,7 +216,10 @@ def admin_adjust_guild(guild_id, *, points_delta=0, set_points=None, guild_point
     if points_delta:
         update["$inc"] = {"points": int(points_delta)}
     _get_db().guild_profiles.update_one({"guild_id": str(guild_id)}, update, upsert=True)
-    return _normalize_guild_profile(_get_db().guild_profiles.find_one({"guild_id": str(guild_id)}, {"_id": 0}) or {}, guild_id)
+    return _normalize_guild_profile(
+        _get_db().guild_profiles.find_one({"guild_id": str(guild_id)}, {"_id": 0}) or {},
+        guild_id,
+    )
 
 
 def list_guild_profiles(limit=25):
