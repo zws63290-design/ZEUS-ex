@@ -21,6 +21,7 @@ from typing import Optional, List, Tuple
 
 import requests
 from user_agent import generate_user_agent
+from PIL import Image  # إضافة لقراءة أبعاد الصور
 
 import discord
 from discord import app_commands
@@ -782,6 +783,12 @@ def _sanitize_extraction(text: str) -> str:
 # ============================================================
 # استخراج النص من صورة واحدة — مع إعادة المحاولة
 # ============================================================
+def get_image_dimensions(image_bytes):
+    """تقرأ أبعاد الصورة الفعلية من بيانات الصورة."""
+    img = Image.open(io.BytesIO(image_bytes))
+    return img.width, img.height
+
+
 def _do_single_extraction(user_id, image_bytes, image_name, thinking_enabled, settings, chat_id):
     """
     الدالة الأساسية لطلب واحد إلى Qwen.
@@ -796,14 +803,17 @@ def _do_single_extraction(user_id, image_bytes, image_name, thinking_enabled, se
     headers['x-request-id'] = str(uuid.uuid4())
     headers['Accept'] = "*/*,text/event-stream"
 
+    # قراءة الأبعاد الفعلية للصورة
+    width, height = get_image_dimensions(image_bytes)
+
     file_payload = {
         "type": "image",
         "file": {"data": {}, "filename": uploaded["filename"], "id": uploaded["id"], "meta": {"name": uploaded["filename"]}},
         "id": uploaded["id"],
         "url": uploaded["url"],
         "name": uploaded["filename"],
-        "image_width": 1024,
-        "image_height": 1024,
+        "image_width": width,
+        "image_height": height,
     }
 
     prompt = build_extraction_prompt(settings or {})
