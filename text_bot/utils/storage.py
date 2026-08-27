@@ -22,6 +22,12 @@ _DEFAULT_PROFILE = {
         "separator_template": "## {name}",
     },
 }
+_DEFAULT_GUILD_PROFILE = {
+    "guild_id": None,
+    "points": 0,
+    "guild_points_enabled": False,
+    "total_extractions": 0,
+}
 _CLIENT = None
 _DB = None
 
@@ -39,6 +45,7 @@ def _get_db():
     _DB = _CLIENT[db_name]
     _DB.user_accounts.create_index([("user_id", ASCENDING)], unique=True)
     _DB.user_profiles.create_index([("user_id", ASCENDING)], unique=True)
+    _DB.guild_profiles.create_index([("guild_id", ASCENDING)], unique=True)
     return _DB
 
 
@@ -69,6 +76,17 @@ def _normalize_profile(doc, user=None):
         result["user_id"] = str(user.id)
         result["username"] = getattr(user, "name", str(user.id))
         result["display_name"] = getattr(user, "display_name", result["username"])
+    result.setdefault("created_at", int(time.time()))
+    result["updated_at"] = int(time.time())
+    return result
+
+
+def _normalize_guild_profile(doc, guild_id=None):
+    result = deepcopy(_DEFAULT_GUILD_PROFILE)
+    if isinstance(doc, dict):
+        result.update({k: doc.get(k, v) for k, v in result.items()})
+    if guild_id is not None:
+        result["guild_id"] = str(guild_id)
     result.setdefault("created_at", int(time.time()))
     result["updated_at"] = int(time.time())
     return result
@@ -134,6 +152,50 @@ def admin_adjust_user(user_id, *, points_delta=0, set_points=None, blocked=None)
 
 def list_user_profiles(limit=25):
     return list(_get_db().user_profiles.find({}, {"_id": 0}).sort("updated_at", -1).limit(int(limit)))
+
+
+def get_guild_profile(guild_id):
+    db = _get_db()
+    doc = db.guild_profiles.find_one({"guild_id": str(guild_id)}, {"_id": 0})
+    profile = _normalize_guild_profile(doc, guild_id)
+    if doc is None:
+        db.guild_profiles.update_one({"guild_id": str(guild_id)}, {"$set": profile}, upsert=True)
+    else:
+        db.guild_profiles.update_one({"guild_id": str(guild_id)}, {"$set": {"updated_at": profile["updated_at"]}}, upsert=True)
+    return profile
+
+
+def consume_guild_point(guild_id):
+    db = _get_db()
+    doc = db.guild_profiles.find_one({"guild_id": str(guild_id)}, {"_id": 0}) or {}
+    profile = _normalize_guild_profile(doc, guild_id)
+    if not profile.get("guild_points_enabled", False):
+        return False, profile
+    if int(profile.get("points", 0)) <= 0:
+        return False, profile
+    updated = db.guild_profiles.find_one_and_update(
+        {"guild_id": str(guild_id), "points": {"$gt": 0}, "guild_points_enabled": True},
+        {"$inc": {"points": -1, "total_extractions": 1}, "$set": {"updated_at": int(time.time())}},
+        return_document=True,
+        projection={"_id": 0},
+    )
+    return bool(updated), _normalize_guild_profile(updated or profile, guild_id)
+
+
+def admin_adjust_guild(guild_id, *, points_delta=0, set_points=None, guild_points_enabled=None):
+    update = {"$set": {"updated_at": int(time.time())}, "$setOnInsert": {"created_at": int(time.time())}}
+    if set_points is not None:
+        update["$set"]["points"] = max(0, int(set_points))
+    if guild_points_enabled is not None:
+        update["$set"]["guild_points_enabled"] = bool(guild_points_enabled)
+    if points_delta:
+        update["$inc"] = {"points": int(points_delta)}
+    _get_db().guild_profiles.update_one({"guild_id": str(guild_id)}, update, upsert=True)
+    return _normalize_guild_profile(_get_db().guild_profiles.find_one({"guild_id": str(guild_id)}, {"_id": 0}) or {}, guild_id)
+
+
+def list_guild_profiles(limit=25):
+    return list(_get_db().guild_profiles.find({}, {"_id": 0}).sort("updated_at", -1).limit(int(limit)))
 
 
 def close_mongo():
